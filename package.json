@@ -1,0 +1,13 @@
+{
+  "name": "character-scene-multiplayer",
+  "version": "1.0.0",
+  "description": "多人角色互動場景 - Socket.io 後端",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "socket.io": "^4.7.5"
+  }
+}
