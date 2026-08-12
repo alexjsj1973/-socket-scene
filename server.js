@@ -161,7 +161,7 @@ io.on('connection', (socket) => {
   socket.on('chat', (data) => {
     const id = socket.data.charId;
     if (!id || !characters[id]) return;
-    const text = (data && String(data.text || '').trim().slice(0, 60)) || '';
+    const text = (data && String(data.text || '').trim().slice(0, 100)) || '';
     if (!text) return;
     const msg = { who: characters[id].name, charId: id, text, isSystem: false, ts: Date.now() };
     pushChat(msg);
