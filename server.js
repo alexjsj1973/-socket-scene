@@ -13,7 +13,7 @@ const app = express();
 const server = http.createServer(app);
 
 // ---------------------------------------------------------------
-// CORS：因為前端會放在 swimlife.tw（和這台後端不同網域），
+// CORS：因為前端會放在 alex.tw（和這台後端不同網域），
 // 瀏覽器的跨網域安全機制需要後端明確允許來源，否則連不上。
 // 如果之後有其他網域也要連，就加進這個陣列裡。
 // ---------------------------------------------------------------
@@ -32,6 +32,37 @@ const io = new Server(server, {
 });
 
 app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.json());
+
+// ---------------------------------------------------------------
+// 管理密碼：清除聊天紀錄前必須提供這組密碼，避免任何人都能亂清。
+// 到 Render 的 Environment 分頁設定 ADMIN_SECRET 這個環境變數，
+// 自己取一組不容易猜的密碼（不要用下面這個預設值）。
+// ---------------------------------------------------------------
+const ADMIN_SECRET = process.env.ADMIN_SECRET || 'change-me';
+
+function setCorsForAdmin(res) {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, X-Admin-Secret');
+}
+
+// 清除所有聊天紀錄的管理 API
+app.options('/admin/clear-chat', (req, res) => {
+  setCorsForAdmin(res);
+  res.sendStatus(204);
+});
+
+app.post('/admin/clear-chat', (req, res) => {
+  setCorsForAdmin(res);
+  const secret = req.headers['x-admin-secret'] || (req.body && req.body.secret);
+  if (!secret || secret !== ADMIN_SECRET) {
+    return res.status(403).json({ ok: false, error: '密碼錯誤' });
+  }
+  chatLog.length = 0;
+  io.emit('chat-cleared');
+  return res.json({ ok: true, cleared: true });
+});
 
 // ---------------------------------------------------------------
 // In-memory 狀態（重啟伺服器會清空；如需持久化可換成資料庫）
