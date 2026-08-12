@@ -13,13 +13,15 @@ const app = express();
 const server = http.createServer(app);
 
 // ---------------------------------------------------------------
-// CORS：因為前端會放在 alex.tw（和這台後端不同網域），
+// CORS：因為前端會放在 swimlife.tw（和這台後端不同網域），
 // 瀏覽器的跨網域安全機制需要後端明確允許來源，否則連不上。
 // 如果之後有其他網域也要連，就加進這個陣列裡。
 // ---------------------------------------------------------------
 const ALLOWED_ORIGINS = [
-  'http://alex.tw',
-  'https://alex.tw'
+  'http://www.swimlife.tw',
+  'https://www.swimlife.tw',
+  'http://swimlife.tw',
+  'https://swimlife.tw'
 ];
 
 const io = new Server(server, {
