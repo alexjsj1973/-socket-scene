@@ -6,6 +6,7 @@
 
 const express = require('express');
 const http = require('http');
+const https = require('https');
 const path = require('path');
 const fs = require('fs');
 const multer = require('multer');
@@ -68,6 +69,51 @@ app.use(express.json());
 // 自己取一組不容易猜的密碼（不要用下面這個預設值）。
 // ---------------------------------------------------------------
 const ADMIN_SECRET = process.env.ADMIN_SECRET || 'change-me';
+
+// ---------------------------------------------------------------
+// 登入 Token 驗證：向 ASP 那邊的 verify_token.asp 做 server-to-server 驗證。
+// VERIFY_TOKEN_URL 請改成實際部署位置；VERIFY_API_KEY 要跟 verify_token.asp
+// 裡設定的 API_KEY 完全一致，兩邊都建議改成從環境變數讀取，不要留在程式碼裡。
+// ---------------------------------------------------------------
+const VERIFY_TOKEN_URL = process.env.VERIFY_TOKEN_URL || 'https://www.swimlife.tw/alex/game/verify_token.asp';
+const VERIFY_API_KEY = process.env.VERIFY_API_KEY || 'a1b2c3d4e5';
+
+// verify_token.asp 驗證成功後會把 token 標記為「已使用」，所以同一個 token
+// 不能打第二次。這裡把驗證結果快取一段時間，讓 Socket.io 斷線重連（同一個
+// token 會再送一次 join）不用重新打一次 ASP，也不會因為 used=1 被擋下來。
+const verifiedTokenCache = new Map(); // token -> { result, expiresAt }
+const TOKEN_CACHE_MS = 10 * 60 * 1000; // 10 分鐘，跟 login_token 的 5 分鐘到期時間分開設計，可自行調整
+
+function verifyLoginToken(token) {
+  return new Promise((resolve) => {
+    if (!token) return resolve({ ok: false, error: 'missing token' });
+
+    const cached = verifiedTokenCache.get(token);
+    if (cached && cached.expiresAt > Date.now()) {
+      return resolve(cached.result);
+    }
+
+    const url = `${VERIFY_TOKEN_URL}?t=${encodeURIComponent(token)}&key=${encodeURIComponent(VERIFY_API_KEY)}`;
+    https.get(url, (res) => {
+      let body = '';
+      res.on('data', (chunk) => { body += chunk; });
+      res.on('end', () => {
+        let result;
+        try {
+          result = JSON.parse(body);
+        } catch (e) {
+          result = { ok: false, error: 'verify_token.asp 回傳格式錯誤' };
+        }
+        if (result.ok) {
+          verifiedTokenCache.set(token, { result, expiresAt: Date.now() + TOKEN_CACHE_MS });
+        }
+        resolve(result);
+      });
+    }).on('error', (err) => {
+      resolve({ ok: false, error: '無法連線到 verify_token.asp：' + err.message });
+    });
+  });
+}
 
 function setCorsForAdmin(res) {
   res.header('Access-Control-Allow-Origin', '*');
@@ -172,12 +218,35 @@ function clampX(x) { return Math.min(95, Math.max(5, Number(x) || 0)); }
 function clampY(y) { return Math.min(92, Math.max(20, Number(y) || 0)); }
 
 io.on('connection', (socket) => {
-  // ---- 玩家送出名字/外觀，加入場景 ----
-  socket.on('join', (data) => {
+  // ---- 玩家剛連上時，前端先用網址帶的 token 問一次「這個人是誰」，
+  // 讓畫面可以把會員暱稱直接帶進名字欄位（欄位鎖定，不開放手動輸入）----
+  socket.on('check-token', async (data) => {
+    const verify = await verifyLoginToken(data && data.token);
+    if (verify.ok) {
+      socket.emit('token-checked', { ok: true, displayName: verify.displayName });
+    } else {
+      socket.emit('token-checked', { ok: false, error: verify.error || '登入已過期，請重新登入' });
+    }
+  });
+
+  // ---- 玩家送出外觀，加入場景 ----
+  socket.on('join', async (data) => {
     // 每個 socket 只能建立一個角色；避免重複 join 造成殭屍角色
     if (socket.data.charId) return;
 
-    const name = (data && String(data.name || '').trim().slice(0, 16)) || '無名旅人';
+    // 先驗證登入 token，沒通過就不建立角色，也不讓玩家連進場景
+    const verify = await verifyLoginToken(data && data.token);
+    if (!verify.ok) {
+      socket.emit('join-error', { error: verify.error || '登入已過期，請重新登入' });
+      return;
+    }
+    // 這個 join 事件是 async 觸發的，理論上一個 socket 短時間內可能被觸發兩次
+    // join；驗證完再檢查一次，避免競爭狀態下建立出兩個角色
+    if (socket.data.charId) return;
+
+    // 名字一律採用 verify_token.asp 驗證回來的會員暱稱，不採信前端送來的 data.name，
+    // 這樣就算有人繞過前端把欄位改掉（例如改 DOM），伺服器還是只認會員本人的暱稱
+    const name = (verify.displayName && String(verify.displayName).trim().slice(0, 16)) || '無名旅人';
     const hair = HAIR_COLORS.includes(data && data.hair) ? data.hair : HAIR_COLORS[Math.floor(Math.random() * HAIR_COLORS.length)];
     const body = BODY_COLORS.includes(data && data.body) ? data.body : BODY_COLORS[Math.floor(Math.random() * BODY_COLORS.length)];
 
