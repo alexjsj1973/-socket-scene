@@ -7,10 +7,38 @@
 const express = require('express');
 const http = require('http');
 const path = require('path');
+const fs = require('fs');
+const multer = require('multer');
 const { Server } = require('socket.io');
 
 const app = express();
 const server = http.createServer(app);
+
+// ---------------------------------------------------------------
+// 場景底圖上傳：圖片存放在 public/uploads，並用 express.static 對外提供。
+// ---------------------------------------------------------------
+const UPLOAD_DIR = path.join(__dirname, 'public', 'uploads');
+fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+
+const bgStorage = multer.diskStorage({
+  destination: (req, file, cb) => cb(null, UPLOAD_DIR),
+  filename: (req, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase() || '.jpg';
+    cb(null, `bg-${Date.now()}${ext}`);
+  }
+});
+
+const uploadBg = multer({
+  storage: bgStorage,
+  limits: { fileSize: 8 * 1024 * 1024 }, // 8MB
+  fileFilter: (req, file, cb) => {
+    if (/^image\//.test(file.mimetype)) cb(null, true);
+    else cb(new Error('只能上傳圖片檔'));
+  }
+});
+
+// 目前場景底圖網址（相對路徑，例如 /uploads/bg-xxx.jpg）。null 代表使用預設底圖。
+let currentBackground = null;
 
 // ---------------------------------------------------------------
 // CORS：因為前端會放在 alex.tw（和這台後端不同網域），
@@ -65,6 +93,61 @@ app.post('/admin/clear-chat', (req, res) => {
 });
 
 // ---------------------------------------------------------------
+// 更換場景底圖的管理 API：上傳一張圖片，存到 public/uploads，
+// 並廣播給所有目前連線中的玩家即時套用。
+// ---------------------------------------------------------------
+app.options('/admin/set-background', (req, res) => {
+  setCorsForAdmin(res);
+  res.sendStatus(204);
+});
+
+app.post('/admin/set-background', (req, res, next) => {
+  setCorsForAdmin(res);
+  next();
+}, uploadBg.single('image'), (req, res) => {
+  const secret = req.headers['x-admin-secret'] || (req.body && req.body.secret);
+  if (!secret || secret !== ADMIN_SECRET) {
+    // 密碼錯誤：把剛剛存到硬碟的檔案刪掉，避免留下垃圾檔
+    if (req.file) fs.unlink(req.file.path, () => {});
+    return res.status(403).json({ ok: false, error: '密碼錯誤' });
+  }
+  if (!req.file) {
+    return res.status(400).json({ ok: false, error: '沒有收到圖片檔案' });
+  }
+
+  // 如果先前也是自行上傳的底圖，換新的之後把舊檔刪掉，避免越堆越多
+  if (currentBackground) {
+    const oldPath = path.join(__dirname, 'public', currentBackground.replace(/^\//, ''));
+    fs.unlink(oldPath, () => {});
+  }
+
+  currentBackground = `/uploads/${req.file.filename}`;
+  io.emit('background-changed', { url: currentBackground });
+  return res.json({ ok: true, url: currentBackground });
+});
+
+// 還原成預設底圖（漸層天空+草地）
+app.options('/admin/reset-background', (req, res) => {
+  setCorsForAdmin(res);
+  res.sendStatus(204);
+});
+
+app.post('/admin/reset-background', (req, res) => {
+  setCorsForAdmin(res);
+  const secret = req.headers['x-admin-secret'] || (req.body && req.body.secret);
+  if (!secret || secret !== ADMIN_SECRET) {
+    return res.status(403).json({ ok: false, error: '密碼錯誤' });
+  }
+  if (currentBackground) {
+    const oldPath = path.join(__dirname, 'public', currentBackground.replace(/^\//, ''));
+    fs.unlink(oldPath, () => {});
+  }
+  currentBackground = null;
+  io.emit('background-changed', { url: null });
+  return res.json({ ok: true, url: null });
+});
+
+// ---------------------------------------------------------------
 // In-memory 狀態（重啟伺服器會清空；如需持久化可換成資料庫）
 // ---------------------------------------------------------------
 const characters = Object.create(null); // id -> {id,name,hair,body,x,y,ownerSocketId}
@@ -116,7 +199,8 @@ io.on('connection', (socket) => {
     socket.emit('init', {
       selfId: id,
       characters: Object.values(characters),
-      chatLog
+      chatLog,
+      background: currentBackground
     });
 
     // 廣播給其他人：有新角色加入
