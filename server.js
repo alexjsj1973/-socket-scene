@@ -9,34 +9,19 @@ const http = require('http');
 const https = require('https');
 const path = require('path');
 const fs = require('fs');
-const multer = require('multer');
 const { Server } = require('socket.io');
 
 const app = express();
 const server = http.createServer(app);
 
 // ---------------------------------------------------------------
-// 場景底圖上傳：圖片存放在 public/uploads，並用 express.static 對外提供。
+// 場景底圖照片：實際的圖片檔案改成存放在 ASP 那台主機上固定的路徑
+// （由 bg_upload.asp 負責接收上傳、固定覆蓋寫成 bg/bg.jpg），
+// 這裡的 Node 後端不再自己保管檔案，只負責記住「現在要用這張圖」
+// 並廣播給所有玩家。每次啟用時網址後面加上 ?v=時間戳 做
+// cache-busting，避免玩家瀏覽器快取到舊圖片。
 // ---------------------------------------------------------------
-const UPLOAD_DIR = path.join(__dirname, 'public', 'uploads');
-fs.mkdirSync(UPLOAD_DIR, { recursive: true });
-
-const bgStorage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, UPLOAD_DIR),
-  filename: (req, file, cb) => {
-    const ext = path.extname(file.originalname).toLowerCase() || '.jpg';
-    cb(null, `bg-${Date.now()}${ext}`);
-  }
-});
-
-const uploadBg = multer({
-  storage: bgStorage,
-  limits: { fileSize: 8 * 1024 * 1024 }, // 8MB
-  fileFilter: (req, file, cb) => {
-    if (/^image\//.test(file.mimetype)) cb(null, true);
-    else cb(new Error('只能上傳圖片檔'));
-  }
-});
+const FIXED_BG_URL = 'https://www.swimlife.tw/alex/game/online/bg/bg.jpg';
 
 // ---------------------------------------------------------------
 // 場景底圖狀態持久化：把「目前用的是哪張底圖、目前的亮度」寫進一個
@@ -193,27 +178,18 @@ app.options('/admin/set-background', (req, res) => {
   res.sendStatus(204);
 });
 
-app.post('/admin/set-background', (req, res, next) => {
+app.post('/admin/set-background', (req, res) => {
   setCorsForAdmin(res);
-  next();
-}, uploadBg.single('image'), (req, res) => {
   const secret = req.headers['x-admin-secret'] || (req.body && req.body.secret);
   if (!secret || secret !== ADMIN_SECRET) {
-    // 密碼錯誤：把剛剛存到硬碟的檔案刪掉，避免留下垃圾檔
-    if (req.file) fs.unlink(req.file.path, () => {});
     return res.status(403).json({ ok: false, error: '密碼錯誤' });
   }
-  if (!req.file) {
-    return res.status(400).json({ ok: false, error: '沒有收到圖片檔案' });
-  }
 
-  // 如果先前也是自行上傳的底圖，換新的之後把舊檔刪掉，避免越堆越多
-  if (currentBackground) {
-    const oldPath = path.join(__dirname, 'public', currentBackground.replace(/^\//, ''));
-    fs.unlink(oldPath, () => {});
-  }
-
-  currentBackground = `/uploads/${req.file.filename}`;
+  // 這支 API 不再接收圖片檔案本身——圖片是由後台管理頁直接上傳給
+  // ASP 主機上的 bg_upload.asp，固定存成 bg/bg.jpg。這裡只要在圖片
+  // 上傳成功「之後」被呼叫，用來記住現在要用這張固定網址的圖，並
+  // 加上時間戳當作 cache-busting 參數，通知所有連線中的玩家立即套用。
+  currentBackground = `${FIXED_BG_URL}?v=${Date.now()}`;
   saveBackgroundState();
   io.emit('background-changed', { url: currentBackground, brightness: currentBrightness });
   return res.json({ ok: true, url: currentBackground, brightness: currentBrightness });
@@ -231,10 +207,8 @@ app.post('/admin/reset-background', (req, res) => {
   if (!secret || secret !== ADMIN_SECRET) {
     return res.status(403).json({ ok: false, error: '密碼錯誤' });
   }
-  if (currentBackground) {
-    const oldPath = path.join(__dirname, 'public', currentBackground.replace(/^\//, ''));
-    fs.unlink(oldPath, () => {});
-  }
+  // 圖片檔案本身放在 ASP 主機上，這裡不需要（也不會）刪除它，
+  // 只是讓所有玩家改回顯示預設的漸層底圖。
   currentBackground = null;
   saveBackgroundState();
   io.emit('background-changed', { url: null, brightness: currentBrightness });
