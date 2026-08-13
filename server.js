@@ -99,7 +99,7 @@ app.use(express.json());
 // 到 Render 的 Environment 分頁設定 ADMIN_SECRET 這個環境變數，
 // 自己取一組不容易猜的密碼（不要用下面這個預設值）。
 // ---------------------------------------------------------------
-const ADMIN_SECRET = process.env.ADMIN_SECRET || 'change-me';
+const ADMIN_SECRET = process.env.ADMIN_SECRET || 'alex6227';
 
 // ---------------------------------------------------------------
 // 登入 Token 驗證：向 ASP 那邊的 verify_token.asp 做 server-to-server 驗證。
