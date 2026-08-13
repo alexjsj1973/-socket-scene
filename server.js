@@ -38,8 +38,38 @@ const uploadBg = multer({
   }
 });
 
+// ---------------------------------------------------------------
+// 場景底圖狀態持久化：把「目前用的是哪張底圖」寫進一個小 JSON 檔，
+// 這樣伺服器重啟（例如 Render 免費方案閒置一段時間被休眠、之後
+// 重新啟動）不會讓底圖自動變回預設，只有管理員自己按「更換底圖」
+// 或「還原成預設底圖」才會改變。
+// ---------------------------------------------------------------
+const STATE_DIR = path.join(__dirname, 'data');
+fs.mkdirSync(STATE_DIR, { recursive: true });
+const BACKGROUND_STATE_FILE = path.join(STATE_DIR, 'background-state.json');
+
+function loadBackgroundState() {
+  try {
+    const raw = fs.readFileSync(BACKGROUND_STATE_FILE, 'utf8');
+    const parsed = JSON.parse(raw);
+    return (parsed && typeof parsed.url === 'string') ? parsed.url : null;
+  } catch (e) {
+    // 檔案不存在（第一次啟動）或內容壞掉，都視為「還沒有人設定過」，用預設底圖
+    return null;
+  }
+}
+
+function saveBackgroundState(url) {
+  try {
+    fs.writeFileSync(BACKGROUND_STATE_FILE, JSON.stringify({ url, updatedAt: Date.now() }), 'utf8');
+  } catch (e) {
+    console.error('❌ 寫入底圖狀態檔失敗，重啟後可能會變回預設底圖：', e.message);
+  }
+}
+
 // 目前場景底圖網址（相對路徑，例如 /uploads/bg-xxx.jpg）。null 代表使用預設底圖。
-let currentBackground = null;
+// 啟動時先從狀態檔讀回上次管理員設定的值，而不是每次都從 null 開始。
+let currentBackground = loadBackgroundState();
 
 // ---------------------------------------------------------------
 // CORS：因為前端會放在 alex.tw（和這台後端不同網域），
@@ -75,7 +105,7 @@ const ADMIN_SECRET = process.env.ADMIN_SECRET || 'change-me';
 // VERIFY_TOKEN_URL 請改成實際部署位置；VERIFY_API_KEY 要跟 verify_token.asp
 // 裡設定的 API_KEY 完全一致，兩邊都建議改成從環境變數讀取，不要留在程式碼裡。
 // ---------------------------------------------------------------
-const VERIFY_TOKEN_URL = process.env.VERIFY_TOKEN_URL || 'https://www.swimlife.tw/alex/game/online/verify_token.asp';
+const VERIFY_TOKEN_URL = process.env.VERIFY_TOKEN_URL || 'https://www.swimlife.tw/alex/game/verify_token.asp';
 const VERIFY_API_KEY = process.env.VERIFY_API_KEY || 'a1b2c3d4e5';
 
 // verify_token.asp 驗證成功後會把 token 標記為「已使用」，所以同一個 token
@@ -168,6 +198,7 @@ app.post('/admin/set-background', (req, res, next) => {
   }
 
   currentBackground = `/uploads/${req.file.filename}`;
+  saveBackgroundState(currentBackground);
   io.emit('background-changed', { url: currentBackground });
   return res.json({ ok: true, url: currentBackground });
 });
@@ -189,6 +220,7 @@ app.post('/admin/reset-background', (req, res) => {
     fs.unlink(oldPath, () => {});
   }
   currentBackground = null;
+  saveBackgroundState(null);
   io.emit('background-changed', { url: null });
   return res.json({ ok: true, url: null });
 });
