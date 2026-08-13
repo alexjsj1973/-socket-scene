@@ -39,10 +39,10 @@ const uploadBg = multer({
 });
 
 // ---------------------------------------------------------------
-// 場景底圖狀態持久化：把「目前用的是哪張底圖」寫進一個小 JSON 檔，
-// 這樣伺服器重啟（例如 Render 免費方案閒置一段時間被休眠、之後
-// 重新啟動）不會讓底圖自動變回預設，只有管理員自己按「更換底圖」
-// 或「還原成預設底圖」才會改變。
+// 場景底圖狀態持久化：把「目前用的是哪張底圖、目前的亮度」寫進一個
+// 小 JSON 檔，這樣伺服器重啟（例如 Render 免費方案閒置一段時間被
+// 休眠、之後重新啟動）不會讓底圖或亮度自動變回預設，只有管理員自己
+// 動作（換圖、還原、調亮度）才會改變。
 // ---------------------------------------------------------------
 const STATE_DIR = path.join(__dirname, 'data');
 fs.mkdirSync(STATE_DIR, { recursive: true });
@@ -52,24 +52,40 @@ function loadBackgroundState() {
   try {
     const raw = fs.readFileSync(BACKGROUND_STATE_FILE, 'utf8');
     const parsed = JSON.parse(raw);
-    return (parsed && typeof parsed.url === 'string') ? parsed.url : null;
+    return {
+      url: (parsed && typeof parsed.url === 'string') ? parsed.url : null,
+      // 亮度用百分比表示，100 = 原始亮度，數字愈小愈暗、愈大愈亮
+      brightness: (parsed && typeof parsed.brightness === 'number' && isFinite(parsed.brightness))
+        ? parsed.brightness
+        : 100
+    };
   } catch (e) {
-    // 檔案不存在（第一次啟動）或內容壞掉，都視為「還沒有人設定過」，用預設底圖
-    return null;
+    // 檔案不存在（第一次啟動）或內容壞掉，都視為「還沒有人設定過」，用預設值
+    return { url: null, brightness: 100 };
   }
 }
 
-function saveBackgroundState(url) {
+// 讀目前的全域狀態（currentBackground / currentBrightness）寫進狀態檔，
+// 呼叫時不用傳參數，直接以當下的全域變數為準。
+function saveBackgroundState() {
   try {
-    fs.writeFileSync(BACKGROUND_STATE_FILE, JSON.stringify({ url, updatedAt: Date.now() }), 'utf8');
+    fs.writeFileSync(
+      BACKGROUND_STATE_FILE,
+      JSON.stringify({ url: currentBackground, brightness: currentBrightness, updatedAt: Date.now() }),
+      'utf8'
+    );
   } catch (e) {
-    console.error('❌ 寫入底圖狀態檔失敗，重啟後可能會變回預設底圖：', e.message);
+    console.error('❌ 寫入底圖狀態檔失敗，重啟後可能會變回預設值：', e.message);
   }
 }
 
 // 目前場景底圖網址（相對路徑，例如 /uploads/bg-xxx.jpg）。null 代表使用預設底圖。
-// 啟動時先從狀態檔讀回上次管理員設定的值，而不是每次都從 null 開始。
-let currentBackground = loadBackgroundState();
+// 目前場景底圖亮度（百分比，100 為原始亮度）。
+// 啟動時先從狀態檔讀回上次管理員設定的值，而不是每次都從預設值開始。
+const initialBackgroundState = loadBackgroundState();
+let currentBackground = initialBackgroundState.url;
+let currentBrightness = initialBackgroundState.brightness;
+
 
 // ---------------------------------------------------------------
 // CORS：因為前端會放在 alex.tw（和這台後端不同網域），
@@ -198,9 +214,9 @@ app.post('/admin/set-background', (req, res, next) => {
   }
 
   currentBackground = `/uploads/${req.file.filename}`;
-  saveBackgroundState(currentBackground);
-  io.emit('background-changed', { url: currentBackground });
-  return res.json({ ok: true, url: currentBackground });
+  saveBackgroundState();
+  io.emit('background-changed', { url: currentBackground, brightness: currentBrightness });
+  return res.json({ ok: true, url: currentBackground, brightness: currentBrightness });
 });
 
 // 還原成預設底圖（漸層天空+草地）
@@ -220,9 +236,47 @@ app.post('/admin/reset-background', (req, res) => {
     fs.unlink(oldPath, () => {});
   }
   currentBackground = null;
-  saveBackgroundState(null);
-  io.emit('background-changed', { url: null });
-  return res.json({ ok: true, url: null });
+  saveBackgroundState();
+  io.emit('background-changed', { url: null, brightness: currentBrightness });
+  return res.json({ ok: true, url: null, brightness: currentBrightness });
+});
+
+// ---------------------------------------------------------------
+// 調整場景底圖亮度的管理 API：body 帶一個 brightness 數值（百分比，
+// 例如 60 代表調暗到只剩 60% 亮度，150 代表調亮到 150%）。不管目前是
+// 自訂上傳的底圖還是預設的漸層底圖，都可以套用，並廣播給所有連線中
+// 的玩家立即套用；同時寫進狀態檔，伺服器重啟也不會跳回 100%。
+// ---------------------------------------------------------------
+const BRIGHTNESS_MIN = 20;
+const BRIGHTNESS_MAX = 180;
+
+app.options('/admin/set-brightness', (req, res) => {
+  setCorsForAdmin(res);
+  res.sendStatus(204);
+});
+
+app.post('/admin/set-brightness', (req, res) => {
+  setCorsForAdmin(res);
+  const secret = req.headers['x-admin-secret'] || (req.body && req.body.secret);
+  if (!secret || secret !== ADMIN_SECRET) {
+    return res.status(403).json({ ok: false, error: '密碼錯誤' });
+  }
+  const brightness = Number(req.body && req.body.brightness);
+  if (!Number.isFinite(brightness) || brightness < BRIGHTNESS_MIN || brightness > BRIGHTNESS_MAX) {
+    return res.status(400).json({ ok: false, error: `亮度數值必須介於 ${BRIGHTNESS_MIN} 到 ${BRIGHTNESS_MAX} 之間` });
+  }
+  currentBrightness = brightness;
+  saveBackgroundState();
+  io.emit('background-changed', { url: currentBackground, brightness: currentBrightness });
+  return res.json({ ok: true, url: currentBackground, brightness: currentBrightness });
+});
+
+// 給後臺管理頁面用：讀取目前的底圖網址與亮度，不需要密碼（純讀取、
+// 內容跟所有玩家在畫面上看到的是同一份），方便管理頁一開啟就能把
+// 滑桿定位到正確的目前值，而不是每次都從 100% 開始。
+app.get('/admin/background-status', (req, res) => {
+  setCorsForAdmin(res);
+  res.json({ ok: true, url: currentBackground, brightness: currentBrightness });
 });
 
 // ---------------------------------------------------------------
@@ -301,7 +355,8 @@ io.on('connection', (socket) => {
       selfId: id,
       characters: Object.values(characters),
       chatLog,
-      background: currentBackground
+      background: currentBackground,
+      brightness: currentBrightness
     });
 
     // 廣播給其他人：有新角色加入
