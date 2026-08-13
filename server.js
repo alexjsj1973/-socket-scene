@@ -106,7 +106,7 @@ const ADMIN_SECRET = process.env.ADMIN_SECRET || 'alex6227';
 // VERIFY_TOKEN_URL 請改成實際部署位置；VERIFY_API_KEY 要跟 verify_token.asp
 // 裡設定的 API_KEY 完全一致，兩邊都建議改成從環境變數讀取，不要留在程式碼裡。
 // ---------------------------------------------------------------
-const VERIFY_TOKEN_URL = process.env.VERIFY_TOKEN_URL || 'https://www.swimlife.tw/alex/game/verify_token.asp';
+const VERIFY_TOKEN_URL = process.env.VERIFY_TOKEN_URL || 'https://www.swimlife.tw/alex/game/online/verify_token.asp';
 const VERIFY_API_KEY = process.env.VERIFY_API_KEY || 'a1b2c3d4e5';
 
 // verify_token.asp 驗證成功後會把 token 標記為「已使用」，所以同一個 token
