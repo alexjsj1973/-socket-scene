@@ -15,57 +15,23 @@ const app = express();
 const server = http.createServer(app);
 
 // ---------------------------------------------------------------
-// 場景底圖照片：不再由管理員上傳單一固定的圖片，改成直接把想要輪流
-// 顯示的圖片放進 ASP 主機上的 bg/ 資料夾（用 FTP 或空間商的檔案總管
-// 上傳即可），玩家「登入、加入場景」的當下由這裡的 Node 後端隨機挑一張
-// 給他。bg_list.asp 負責列出資料夾裡目前有哪些圖片，這裡把清單快取
-// 一段時間，避免每個玩家 join 都重打一次 ASP。
+// 場景底圖照片：每個房間固定使用一張指定的圖片（檔名在下面的
+// ROOMS_CONFIG 裡設定），不再像之前那樣每次 join 隨機從 bg/ 資料夾裡
+// 挑一張。圖片一樣是放在 ASP 主機的 bg/ 資料夾（用 FTP 或空間商的檔案
+// 總管上傳即可），這裡只是組出完整網址。
+//
+// 注意：bg_list.asp 現在只有前端「場景調整 → 場景底圖」選單在用（讓玩家
+// 自己手動瀏覽 bg/ 資料夾裡所有圖片、換成自己想要的），跟這裡「房間固定
+// 底圖」是兩件獨立的事，互不影響。
 // ---------------------------------------------------------------
 const BG_FOLDER_URL = 'https://www.swimlife.tw/alex/game/online/bg/';
-const BG_LIST_URL = process.env.BG_LIST_URL || 'https://www.swimlife.tw/alex/game/online/bg_list.asp';
-const BG_LIST_REFRESH_MS = 5 * 60 * 1000; // 5 分鐘重新跟 ASP 要一次最新清單
 
-let bgFileList = [];      // 快取的圖片檔名清單，例如 ['bg1.jpg','bg2.jpg']
-let bgListFetchedAt = 0;
-
-// 跟 bg_list.asp 要一次 bg/ 資料夾裡的檔名清單。失敗或格式不對就回傳空陣列，
-// 呼叫端會退回使用預設漸層底圖，不會讓整個 join 流程掛掉。
-function fetchBgList() {
-  return new Promise((resolve) => {
-    https.get(BG_LIST_URL, (res) => {
-      let body = '';
-      res.on('data', (chunk) => { body += chunk; });
-      res.on('end', () => {
-        try {
-          const data = JSON.parse(body);
-          if (data && data.ok && Array.isArray(data.files)) {
-            resolve(data.files.filter(name => typeof name === 'string' && name.length > 0));
-            return;
-          }
-        } catch (e) {
-          // 格式不對，往下走回傳空陣列
-        }
-        resolve([]);
-      });
-    }).on('error', () => resolve([]));
-  });
-}
-
-// 取得一個隨機的場景底圖網址；資料夾抓不到清單或是空的，就回傳 null
+// 取得某個房間固定底圖的完整網址；房間沒設定 background 就回傳 null
 // （前端看到 null 會顯示預設的漸層天空+草地底圖）。
-async function getRandomBackgroundUrl() {
-  const now = Date.now();
-  if (bgFileList.length === 0 || now - bgListFetchedAt > BG_LIST_REFRESH_MS) {
-    const files = await fetchBgList();
-    if (files.length > 0) {
-      bgFileList = files;
-      bgListFetchedAt = now;
-    }
-  }
-  if (bgFileList.length === 0) return null;
-  const picked = bgFileList[Math.floor(Math.random() * bgFileList.length)];
+function getRoomBackgroundUrl(room) {
+  if (!room || !room.background) return null;
   // 加上 ?v=時間戳 做 cache-busting，避免玩家瀏覽器快取到舊圖片
-  return `${BG_FOLDER_URL}${picked}?v=${Date.now()}`;
+  return `${BG_FOLDER_URL}${room.background}?v=${Date.now()}`;
 }
 
 // ---------------------------------------------------------------
@@ -120,6 +86,10 @@ let currentBrightness = initialBackgroundState.brightness;
 // 圖片道具，x/y 是在場景裡的位置（百分比，0~100，跟角色座標系統一樣），
 // to 是點下去要去的房間 id，label 是顯示給玩家看的文字（要去哪裡）。
 //
+// background：這個房間固定使用哪一張底圖，填 bg/ 資料夾裡的檔名就好
+// （程式會自動接上 BG_FOLDER_URL），不用整段網址。沒有填的話前端會顯示
+// 預設的漸層天空+草地底圖。
+//
 // 要新增房間或傳送點，直接在下面加一筆就好；不需要動到其他程式邏輯。
 // 記得幫新房間也設定「回程」的傳送點，不然玩家進去後就出不來了。
 // ---------------------------------------------------------------
@@ -127,6 +97,7 @@ const ROOMS_CONFIG = {
   main: {
     id: 'main',
     name: '大廳',
+    background: 'bg1.jpg',
     portals: [
       { to: 'annex1', x: 5, y: 90, label: '活動報名' },
       { to: 'annex2', x: 15, y: 90, label: '課程教學' }
@@ -135,6 +106,7 @@ const ROOMS_CONFIG = {
   annex1: {
     id: 'annex1',
     name: '活動報名',
+    background: 'bg2.jpg',
     portals: [
       { to: 'main', x: 10, y: 78, label: '大廳' }
     ]
@@ -142,6 +114,7 @@ const ROOMS_CONFIG = {
   annex2: {
     id: 'annex2',
     name: '課程教學',
+    background: 'bg3.jpg',
     portals: [
       { to: 'main', x: 10, y: 78, label: '大廳' }
     ]
@@ -157,6 +130,7 @@ Object.keys(ROOMS_CONFIG).forEach((roomId) => {
   rooms[roomId] = {
     id: cfg.id,
     name: cfg.name,
+    background: cfg.background || null,
     portals: cfg.portals || [],
     characters: Object.create(null), // id -> {id,name,hair,body,x,y,ownerSocketId}
     chatLog: []                      // {who, charId, text, isSystem, ts}
@@ -386,9 +360,9 @@ io.on('connection', (socket) => {
     socket.data.roomId = roomId;
     socket.join(roomId);
 
-    // 場景底圖：登入這一刻才從 bg/ 資料夾的清單裡隨機挑一張給這位玩家，
-    // 抓不到清單或資料夾是空的就回傳 null（前端會顯示預設漸層底圖）。
-    const background = await getRandomBackgroundUrl();
+    // 場景底圖：這個房間固定用哪張圖，在 ROOMS_CONFIG 裡設定好了，
+    // 這裡直接組出網址即可，不用再隨機挑。
+    const background = getRoomBackgroundUrl(room);
 
     // 只回給這位新玩家：完整現況快照（含目前房間的傳送點清單）
     socket.emit('init', {
@@ -461,7 +435,7 @@ io.on('connection', (socket) => {
   });
 
   // ---- 傳送到另一個房間：點了場景裡的傳送點道具才會觸發 ----
-  socket.on('teleport', async (data) => {
+  socket.on('teleport', (data) => {
     const fromRoomId = socket.data.roomId;
     const id = socket.data.charId;
     const fromRoom = getRoom(fromRoomId);
@@ -502,8 +476,8 @@ io.on('connection', (socket) => {
     socket.join(toRoomId);
     socket.data.roomId = toRoomId;
 
-    // 新房間的場景底圖一樣是隨機挑一張，跟一般 join 邏輯一致
-    const background = await getRandomBackgroundUrl();
+    // 新房間的場景底圖固定用它自己設定的那張，跟 join 邏輯一致
+    const background = getRoomBackgroundUrl(toRoom);
 
     // 只回給這位玩家：新房間的完整現況快照
     socket.emit('room-changed', {
