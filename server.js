@@ -112,6 +112,54 @@ function saveBackgroundState() {
 const initialBackgroundState = loadBackgroundState();
 let currentBrightness = initialBackgroundState.brightness;
 
+// ---------------------------------------------------------------
+// 房間設定：每個房間有自己的場景（角色、聊天紀錄），玩家在某個房間
+// 只看得到、聊得到同房間的人，跟其他房間的人是分開的。
+//
+// portals：這個房間裡有哪些「傳送點」，每個傳送點是一張放在場景上的
+// 圖片道具，x/y 是在場景裡的位置（百分比，0~100，跟角色座標系統一樣），
+// to 是點下去要去的房間 id，label 是顯示給玩家看的文字（要去哪裡）。
+//
+// 要新增房間或傳送點，直接在下面加一筆就好；不需要動到其他程式邏輯。
+// 記得幫新房間也設定「回程」的傳送點，不然玩家進去後就出不來了。
+// ---------------------------------------------------------------
+const ROOMS_CONFIG = {
+  main: {
+    id: 'main',
+    name: '大廳',
+    portals: [
+      { to: 'annex', x: 90, y: 78, label: '傳送密室' }
+    ]
+  },
+  annex: {
+    id: 'annex',
+    name: '傳送密室',
+    portals: [
+      { to: 'main', x: 10, y: 78, label: '大廳' }
+    ]
+  }
+};
+const DEFAULT_ROOM_ID = 'main';
+
+// 每個房間各自的即時狀態：角色清單、聊天紀錄。重啟伺服器會清空
+// （如需持久化可換成資料庫）。
+const rooms = Object.create(null);
+Object.keys(ROOMS_CONFIG).forEach((roomId) => {
+  const cfg = ROOMS_CONFIG[roomId];
+  rooms[roomId] = {
+    id: cfg.id,
+    name: cfg.name,
+    portals: cfg.portals || [],
+    characters: Object.create(null), // id -> {id,name,hair,body,x,y,ownerSocketId}
+    chatLog: []                      // {who, charId, text, isSystem, ts}
+  };
+});
+
+function getRoom(roomId) {
+  return rooms[roomId] || null;
+}
+
+
 
 // ---------------------------------------------------------------
 // CORS：因為前端會放在 alex.tw（和這台後端不同網域），
@@ -205,7 +253,7 @@ app.post('/admin/clear-chat', (req, res) => {
   if (!secret || secret !== ADMIN_SECRET) {
     return res.status(403).json({ ok: false, error: '密碼錯誤' });
   }
-  chatLog.length = 0;
+  Object.keys(rooms).forEach((roomId) => { rooms[roomId].chatLog.length = 0; });
   io.emit('chat-cleared');
   return res.json({ ok: true, cleared: true });
 });
@@ -252,9 +300,9 @@ app.get('/admin/background-status', (req, res) => {
 
 // ---------------------------------------------------------------
 // In-memory 狀態（重啟伺服器會清空；如需持久化可換成資料庫）
+// 角色跟聊天紀錄已經改成「每個房間各自一份」，存在上面的 rooms 物件裡；
+// 這裡只留跨房間共用的東西（角色外觀色票、角色編號流水號）。
 // ---------------------------------------------------------------
-const characters = Object.create(null); // id -> {id,name,hair,body,x,y,ownerSocketId}
-const chatLog = [];                     // {who, charId, text, isSystem, ts}
 const MAX_CHAT = 200;
 
 const HAIR_COLORS = ["#3b2a20", "#8a5a34", "#c99a4a", "#d94f4f", "#5c7a5e", "#4a5b8a"];
@@ -262,13 +310,15 @@ const BODY_COLORS = ["#b5623f", "#e8b559", "#5c7a5e", "#4a5b8a", "#8a5a8a", "#3b
 
 let charCounter = 0;
 
-function pushChat(entry) {
-  chatLog.push(entry);
-  if (chatLog.length > MAX_CHAT) chatLog.shift();
+function pushChat(room, entry) {
+  room.chatLog.push(entry);
+  if (room.chatLog.length > MAX_CHAT) room.chatLog.shift();
 }
 
-function broadcastCount() {
-  io.emit('online-count', Object.keys(characters).length);
+function broadcastCount(roomId) {
+  const room = getRoom(roomId);
+  if (!room) return;
+  io.to(roomId).emit('online-count', Object.keys(room.characters).length);
 }
 
 function clampX(x) { return Math.min(95, Math.max(5, Number(x) || 0)); }
@@ -318,83 +368,168 @@ io.on('connection', (socket) => {
       y: 30 + Math.random() * 50,
       ownerSocketId: socket.id
     };
-    characters[id] = c;
+
+    // 一律從預設房間（大廳）開始，不管上次斷線前傳送到哪個房間，
+    // 重新連線後都從大廳重新出發，行為單純、不容易出錯。
+    const roomId = DEFAULT_ROOM_ID;
+    const room = getRoom(roomId);
+    room.characters[id] = c;
     socket.data.charId = id;
+    socket.data.roomId = roomId;
+    socket.join(roomId);
 
     // 場景底圖：登入這一刻才從 bg/ 資料夾的清單裡隨機挑一張給這位玩家，
     // 抓不到清單或資料夾是空的就回傳 null（前端會顯示預設漸層底圖）。
     const background = await getRandomBackgroundUrl();
 
-    // 只回給這位新玩家：完整現況快照
+    // 只回給這位新玩家：完整現況快照（含目前房間的傳送點清單）
     socket.emit('init', {
       selfId: id,
-      characters: Object.values(characters),
-      chatLog,
+      roomId: room.id,
+      roomName: room.name,
+      portals: room.portals,
+      characters: Object.values(room.characters),
+      chatLog: room.chatLog,
       background,
       brightness: currentBrightness
     });
 
-    // 廣播給其他人：有新角色加入
-    socket.broadcast.emit('char-joined', c);
+    // 廣播給同房間的其他人：有新角色加入
+    socket.to(roomId).emit('char-joined', c);
 
     const sysMsg = { who: '系統', text: `${name} 加入了場景`, isSystem: true, ts: Date.now() };
-    pushChat(sysMsg);
-    io.emit('chat-message', sysMsg);
-    broadcastCount();
+    pushChat(room, sysMsg);
+    io.to(roomId).emit('chat-message', sysMsg);
+    broadcastCount(roomId);
   });
 
   // ---- 移動：只能移動自己的角色 ----
   socket.on('move', (data) => {
+    const roomId = socket.data.roomId;
     const id = socket.data.charId;
-    if (!id || !characters[id] || !data) return;
+    const room = getRoom(roomId);
+    if (!room || !id || !room.characters[id] || !data) return;
     const x = clampX(data.x);
     const y = clampY(data.y);
-    characters[id].x = x;
-    characters[id].y = y;
-    io.emit('char-moved', { id, x, y });
+    room.characters[id].x = x;
+    room.characters[id].y = y;
+    io.to(roomId).emit('char-moved', { id, x, y });
   });
 
   // ---- 捏一捏：換髮色/衣服色，只能改自己的 ----
   socket.on('customize', (data) => {
+    const roomId = socket.data.roomId;
     const id = socket.data.charId;
-    if (!id || !characters[id] || !data) return;
-    if (HAIR_COLORS.includes(data.hair)) characters[id].hair = data.hair;
-    if (BODY_COLORS.includes(data.body)) characters[id].body = data.body;
-    io.emit('char-customized', { id, hair: characters[id].hair, body: characters[id].body });
+    const room = getRoom(roomId);
+    if (!room || !id || !room.characters[id] || !data) return;
+    if (HAIR_COLORS.includes(data.hair)) room.characters[id].hair = data.hair;
+    if (BODY_COLORS.includes(data.body)) room.characters[id].body = data.body;
+    io.to(roomId).emit('char-customized', { id, hair: room.characters[id].hair, body: room.characters[id].body });
   });
 
   // ---- 改名：只能改自己的 ----
   socket.on('rename', (data) => {
+    const roomId = socket.data.roomId;
     const id = socket.data.charId;
-    if (!id || !characters[id]) return;
-    const name = (data && String(data.name || '').trim().slice(0, 16)) || characters[id].name;
-    characters[id].name = name;
-    io.emit('char-renamed', { id, name });
+    const room = getRoom(roomId);
+    if (!room || !id || !room.characters[id]) return;
+    const name = (data && String(data.name || '').trim().slice(0, 16)) || room.characters[id].name;
+    room.characters[id].name = name;
+    io.to(roomId).emit('char-renamed', { id, name });
   });
 
   // ---- 聊天 ----
   socket.on('chat', (data) => {
+    const roomId = socket.data.roomId;
     const id = socket.data.charId;
-    if (!id || !characters[id]) return;
+    const room = getRoom(roomId);
+    if (!room || !id || !room.characters[id]) return;
     const text = (data && String(data.text || '').trim().slice(0, 100)) || '';
     if (!text) return;
-    const msg = { who: characters[id].name, charId: id, text, isSystem: false, ts: Date.now() };
-    pushChat(msg);
-    io.emit('chat-message', msg);
-    io.emit('char-bubble', { id, text });
+    const msg = { who: room.characters[id].name, charId: id, text, isSystem: false, ts: Date.now() };
+    pushChat(room, msg);
+    io.to(roomId).emit('chat-message', msg);
+    io.to(roomId).emit('char-bubble', { id, text });
+  });
+
+  // ---- 傳送到另一個房間：點了場景裡的傳送點道具才會觸發 ----
+  socket.on('teleport', async (data) => {
+    const fromRoomId = socket.data.roomId;
+    const id = socket.data.charId;
+    const fromRoom = getRoom(fromRoomId);
+    if (!fromRoom || !id || !fromRoom.characters[id]) return;
+
+    const toRoomId = data && data.to;
+    const toRoom = getRoom(toRoomId);
+    if (!toRoom) {
+      socket.emit('teleport-error', { error: '目的地房間不存在' });
+      return;
+    }
+
+    // 一定要現在這個房間裡真的有一個通往目的地的傳送點才放行，避免有人
+    // 繞過前端直接送 teleport 事件亂跳房間。
+    const portal = (fromRoom.portals || []).find(p => p.to === toRoomId);
+    if (!portal) {
+      socket.emit('teleport-error', { error: '這個房間沒有通往那裡的傳送點' });
+      return;
+    }
+
+    // 離開原本的房間：從角色清單移除、離開 socket.io room、廣播給原房間的人
+    const c = fromRoom.characters[id];
+    delete fromRoom.characters[id];
+    socket.leave(fromRoomId);
+    io.to(fromRoomId).emit('char-left', { id });
+    const leftMsg = { who: '系統', text: `${c.name} 傳送離開了場景`, isSystem: true, ts: Date.now() };
+    pushChat(fromRoom, leftMsg);
+    io.to(fromRoomId).emit('chat-message', leftMsg);
+    broadcastCount(fromRoomId);
+
+    // 進入新房間：如果新房間裡剛好有一個「通往原本房間」的傳送點，就從那個
+    // 傳送點的位置重生（比較合理，像是從門走出來），沒有的話就隨機給個位置。
+    const spawnPortal = (toRoom.portals || []).find(p => p.to === fromRoomId);
+    c.x = clampX(spawnPortal ? spawnPortal.x : 20 + Math.random() * 60);
+    c.y = clampY(spawnPortal ? spawnPortal.y : 30 + Math.random() * 50);
+
+    toRoom.characters[id] = c;
+    socket.join(toRoomId);
+    socket.data.roomId = toRoomId;
+
+    // 新房間的場景底圖一樣是隨機挑一張，跟一般 join 邏輯一致
+    const background = await getRandomBackgroundUrl();
+
+    // 只回給這位玩家：新房間的完整現況快照
+    socket.emit('room-changed', {
+      selfId: id,
+      roomId: toRoom.id,
+      roomName: toRoom.name,
+      portals: toRoom.portals,
+      characters: Object.values(toRoom.characters),
+      chatLog: toRoom.chatLog,
+      background,
+      brightness: currentBrightness
+    });
+
+    // 廣播給新房間的其他人：有角色傳送進來了
+    socket.to(toRoomId).emit('char-joined', c);
+    const joinMsg = { who: '系統', text: `${c.name} 傳送進入了場景`, isSystem: true, ts: Date.now() };
+    pushChat(toRoom, joinMsg);
+    io.to(toRoomId).emit('chat-message', joinMsg);
+    broadcastCount(toRoomId);
   });
 
   // ---- 離線：把角色從場景移除，通知大家 ----
   socket.on('disconnect', () => {
+    const roomId = socket.data.roomId;
     const id = socket.data.charId;
-    if (id && characters[id]) {
-      const name = characters[id].name;
-      delete characters[id];
-      io.emit('char-left', { id });
+    const room = getRoom(roomId);
+    if (room && id && room.characters[id]) {
+      const name = room.characters[id].name;
+      delete room.characters[id];
+      io.to(roomId).emit('char-left', { id });
       const sysMsg = { who: '系統', text: `${name} 離開了場景`, isSystem: true, ts: Date.now() };
-      pushChat(sysMsg);
-      io.emit('chat-message', sysMsg);
-      broadcastCount();
+      pushChat(room, sysMsg);
+      io.to(roomId).emit('chat-message', sysMsg);
+      broadcastCount(roomId);
     }
   });
 });
