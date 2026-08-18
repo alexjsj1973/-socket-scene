@@ -128,8 +128,8 @@ const ROOMS_CONFIG = {
     id: 'main',
     name: '大廳',
     portals: [
-      { to: 'annex1', x: 5, y: 85, label: '活動報名' },
-      { to: 'annex2', x: 5, y: 78, label: '課程教學' }
+      { to: 'annex1', x: 5, y: 90, label: '活動報名' },
+      { to: 'annex2', x: 15, y: 90, label: '課程教學' }
     ]
   },
   annex1: {
