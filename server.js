@@ -128,8 +128,8 @@ const ROOMS_CONFIG = {
     id: 'main',
     name: '大廳',
     portals: [
-      { to: 'annex1', x: 10, y: 78, label: '活動報名' }
-      { to: 'annex2', x: 10, y: 78, label: '課程教學' }      
+      { to: 'annex1', x: 10, y: 78, label: '活動報名' },
+      { to: 'annex2', x: 20, y: 78, label: '課程教學' }
     ]
   },
   annex1: {
@@ -145,7 +145,7 @@ const ROOMS_CONFIG = {
     portals: [
       { to: 'main', x: 10, y: 78, label: '大廳' }
     ]
-  }  
+  }
 };
 const DEFAULT_ROOM_ID = 'main';
 
