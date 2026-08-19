@@ -309,7 +309,9 @@ function ensureEventRoomsAndPortals(sorts) {
         name: sort.name,
         background: null, // 沒有另外指定底圖，前端會顯示預設漸層底圖
         portals: [
-          { to: DEFAULT_ROOM_ID, x: 10, y: 78, label: '大廳' }
+          // 位置跟大廳最左下角那個傳送點（第一個分類，index 0）一致，
+          // 這樣「回大廳」的傳送點視覺上跟玩家記憶中的位置對得起來。
+          { to: DEFAULT_ROOM_ID, x: computeEventPortalPosition(0).x, y: computeEventPortalPosition(0).y, label: '大廳' }
         ],
         characters: Object.create(null),
         chatLog: [],
