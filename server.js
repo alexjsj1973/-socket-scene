@@ -518,6 +518,16 @@ const BODY_COLORS = ["#b5623f", "#e8b559", "#5c7a5e", "#4a5b8a", "#8a5a8a", "#3b
 
 let charCounter = 0;
 
+// ---------------------------------------------------------------
+// 同帳號同時上線管制：memberId -> 目前代表這個會員的 socket.id。
+// 同一個會員（同一組 member_no）不管開幾個分頁、幾台裝置登入，
+// 遊戲場景裡永遠只能有「最新的那一條連線」在線上——舊的連線
+// join 成功後，一旦有更新的連線用同一個 memberId 進來，就會被踢掉。
+// 這是「新登入為主」的策略；如果想改成「已登入時擋新登入」，
+// 請參考下面 join 事件裡的註解。
+// ---------------------------------------------------------------
+const onlineMembers = new Map(); // memberId -> socket.id
+
 function pushChat(room, entry) {
   room.chatLog.push(entry);
   if (room.chatLog.length > MAX_CHAT) room.chatLog.shift();
@@ -558,6 +568,26 @@ io.on('connection', (socket) => {
     // 這個 join 事件是 async 觸發的，理論上一個 socket 短時間內可能被觸發兩次
     // join；驗證完再檢查一次，避免競爭狀態下建立出兩個角色
     if (socket.data.charId) return;
+
+    // ---- 同帳號同時上線管制 ----
+    // verify_token.asp 回傳的 memberId 是資料庫裡真正的會員編號，不像 token
+    // 每次登入都不一樣，同一個會員不管開幾個分頁重新登入，memberId 都相同，
+    // 可以拿來判斷「這個人是不是已經在別的地方上線了」。
+    const memberId = verify.memberId;
+    const existingSocketId = onlineMembers.get(memberId);
+    if (existingSocketId && existingSocketId !== socket.id) {
+      // 策略一（目前採用）：新登入為主，把舊連線踢掉 ------------------
+      const oldSocket = io.sockets.sockets.get(existingSocketId);
+      if (oldSocket) {
+        oldSocket.emit('kicked', { reason: '您的帳號已在其他地方登入，這個連線已被登出' });
+        oldSocket.disconnect(true); // 觸發舊連線的 disconnect，會自動把舊角色從房間移除
+      }
+      // 策略二（如果想改成「已登入就擋新登入」，把上面兩行換成下面這樣）：
+      //   socket.emit('join-error', { error: '這個帳號已經在其他地方上線中' });
+      //   return;
+    }
+    onlineMembers.set(memberId, socket.id);
+    socket.data.memberId = memberId; // disconnect 時要用，見下方 disconnect 事件
 
     // 名字一律採用 verify_token.asp 驗證回來的會員暱稱，不採信前端送來的 data.name，
     // 這樣就算有人繞過前端把欄位改掉（例如改 DOM），伺服器還是只認會員本人的暱稱
@@ -744,6 +774,13 @@ io.on('connection', (socket) => {
 
   // ---- 離線：把角色從場景移除，通知大家 ----
   socket.on('disconnect', () => {
+    // 只有「onlineMembers 裡記錄的還是自己這條連線」才清掉；如果這個
+    // memberId 已經被更新的連線覆蓋過去（代表自己是被踢掉的那個舊連線），
+    // 就不要動它，避免把新連線剛寫入的記錄誤刪。
+    if (socket.data.memberId && onlineMembers.get(socket.data.memberId) === socket.id) {
+      onlineMembers.delete(socket.data.memberId);
+    }
+
     const roomId = socket.data.roomId;
     const id = socket.data.charId;
     const room = getRoom(roomId);
