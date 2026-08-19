@@ -155,7 +155,7 @@ const ROOMS_CONFIG = {
   main: {
     id: 'main',
     name: '集會廣場',
-    background: 'bg1.jpg',
+    background: 'room1.jpg',
     portals: [
       { to: 'annex1', x: 5, y: 90, label: '活動報名' },
       { to: 'annex2', x: 15, y: 90, label: '課程教學' }
