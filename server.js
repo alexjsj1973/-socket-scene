@@ -51,11 +51,11 @@ function loadBackgroundState() {
       // 亮度用百分比表示，100 = 原始亮度，數字愈小愈暗、愈大愈亮
       brightness: (parsed && typeof parsed.brightness === 'number' && isFinite(parsed.brightness))
         ? parsed.brightness
-        : 100
+        : 60
     };
   } catch (e) {
     // 檔案不存在（第一次啟動）或內容壞掉，都視為「還沒有人設定過」，用預設值
-    return { brightness: 100 };
+    return { brightness: 60 };
   }
 }
 
