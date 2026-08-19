@@ -516,6 +516,13 @@ const MAX_CHAT = 200;
 const HAIR_COLORS = ["#3b2a20", "#8a5a34", "#c99a4a", "#d94f4f", "#5c7a5e", "#4a5b8a"];
 const BODY_COLORS = ["#b5623f", "#e8b559", "#5c7a5e", "#4a5b8a", "#8a5a8a", "#3b2a20"];
 
+// 角色的陰影顏色 / 背景光暈顏色：前端改成調色盤自由選色，不再是固定色票，
+// 所以這裡不用色票陣列做白名單比對，改用正則驗證是不是合法的 #rrggbb 色碼；
+// 沒帶、或帶了不合法的值，就退回下面這兩個預設色。
+const HEX_COLOR_RE = /^#[0-9a-fA-F]{6}$/;
+const DEFAULT_SHADOW_COLOR = "#2b2420";
+const DEFAULT_GLOW_COLOR = "#ffe9a8";
+
 let charCounter = 0;
 
 // ---------------------------------------------------------------
@@ -594,6 +601,8 @@ io.on('connection', (socket) => {
     const name = (verify.displayName && String(verify.displayName).trim().slice(0, 16)) || '無名旅人';
     const hair = HAIR_COLORS.includes(data && data.hair) ? data.hair : HAIR_COLORS[Math.floor(Math.random() * HAIR_COLORS.length)];
     const body = BODY_COLORS.includes(data && data.body) ? data.body : BODY_COLORS[Math.floor(Math.random() * BODY_COLORS.length)];
+    const shadowColor = HEX_COLOR_RE.test(data && data.shadowColor) ? data.shadowColor : DEFAULT_SHADOW_COLOR;
+    const glowColor = HEX_COLOR_RE.test(data && data.glowColor) ? data.glowColor : DEFAULT_GLOW_COLOR;
 
     charCounter++;
     const id = `c${charCounter}_${socket.id.slice(0, 5)}`;
@@ -602,6 +611,8 @@ io.on('connection', (socket) => {
       name,
       hair,
       body,
+      shadowColor,
+      glowColor,
       x: 20 + Math.random() * 60,
       y: 30 + Math.random() * 50,
       ownerSocketId: socket.id
@@ -664,7 +675,9 @@ io.on('connection', (socket) => {
     io.to(roomId).emit('char-moved', { id, x, y });
   });
 
-  // ---- 捏一捏：換髮色/衣服色，只能改自己的 ----
+  // ---- 捏一捏：換髮色/衣服色/陰影顏色/背景光暈顏色，只能改自己的 ----
+  // 陰影顏色、背景光暈顏色是前端調色盤自由選色送上來的 #rrggbb 色碼，
+  // 不是固定色票，所以用正則驗證格式，而不是白名單比對。
   socket.on('customize', (data) => {
     const roomId = socket.data.roomId;
     const id = socket.data.charId;
@@ -672,7 +685,15 @@ io.on('connection', (socket) => {
     if (!room || !id || !room.characters[id] || !data) return;
     if (HAIR_COLORS.includes(data.hair)) room.characters[id].hair = data.hair;
     if (BODY_COLORS.includes(data.body)) room.characters[id].body = data.body;
-    io.to(roomId).emit('char-customized', { id, hair: room.characters[id].hair, body: room.characters[id].body });
+    if (HEX_COLOR_RE.test(data.shadowColor)) room.characters[id].shadowColor = data.shadowColor;
+    if (HEX_COLOR_RE.test(data.glowColor)) room.characters[id].glowColor = data.glowColor;
+    io.to(roomId).emit('char-customized', {
+      id,
+      hair: room.characters[id].hair,
+      body: room.characters[id].body,
+      shadowColor: room.characters[id].shadowColor || DEFAULT_SHADOW_COLOR,
+      glowColor: room.characters[id].glowColor || DEFAULT_GLOW_COLOR
+    });
   });
 
   // ---- 改名：只能改自己的 ----
