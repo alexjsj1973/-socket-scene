@@ -51,25 +51,34 @@ function loadBackgroundState() {
       // 亮度用百分比表示，100 = 原始亮度，數字愈小愈暗、愈大愈亮
       brightness: (parsed && typeof parsed.brightness === 'number' && isFinite(parsed.brightness))
         ? parsed.brightness
-        : 60
+        : 60,
+      // 每個房間管理員自己選過的底圖檔名（roomId -> 檔名），沒被選過的房間
+      // 不會出現在這裡，會繼續用 ROOMS_CONFIG 裡寫的預設值。
+      roomBackgrounds: (parsed && parsed.roomBackgrounds && typeof parsed.roomBackgrounds === 'object')
+        ? parsed.roomBackgrounds
+        : {}
     };
   } catch (e) {
     // 檔案不存在（第一次啟動）或內容壞掉，都視為「還沒有人設定過」，用預設值
-    return { brightness: 60 };
+    return { brightness: 60, roomBackgrounds: {} };
   }
 }
 
-// 讀目前的全域亮度（currentBrightness）寫進狀態檔，呼叫時不用傳參數，
-// 直接以當下的全域變數為準。
+// 把目前的全域亮度（currentBrightness）跟每個房間目前的底圖檔名一起寫進
+// 狀態檔，呼叫時不用傳參數，直接以當下的全域變數 / rooms 物件為準。
 function saveBackgroundState() {
   try {
+    const roomBackgrounds = {};
+    Object.keys(rooms).forEach((roomId) => {
+      roomBackgrounds[roomId] = rooms[roomId].background || null;
+    });
     fs.writeFileSync(
       BACKGROUND_STATE_FILE,
-      JSON.stringify({ brightness: currentBrightness, updatedAt: Date.now() }),
+      JSON.stringify({ brightness: currentBrightness, roomBackgrounds, updatedAt: Date.now() }),
       'utf8'
     );
   } catch (e) {
-    console.error('❌ 寫入亮度狀態檔失敗，重啟後可能會變回預設值：', e.message);
+    console.error('❌ 寫入場景狀態檔失敗，重啟後可能會變回預設值：', e.message);
   }
 }
 
@@ -135,6 +144,15 @@ Object.keys(ROOMS_CONFIG).forEach((roomId) => {
     characters: Object.create(null), // id -> {id,name,hair,body,x,y,ownerSocketId}
     chatLog: []                      // {who, charId, text, isSystem, ts}
   };
+});
+
+// 啟動時把管理員之前透過後台選過的房間底圖蓋回去，這樣重啟伺服器
+// 不會跳回 ROOMS_CONFIG 裡寫死的預設圖，只有管理員自己在後台改過的
+// 房間才會被蓋掉，沒改過的房間維持 ROOMS_CONFIG 的預設值。
+Object.keys(initialBackgroundState.roomBackgrounds || {}).forEach((roomId) => {
+  if (rooms[roomId]) {
+    rooms[roomId].background = initialBackgroundState.roomBackgrounds[roomId] || null;
+  }
 });
 
 function getRoom(roomId) {
@@ -304,10 +322,14 @@ function ensureEventRoomsAndPortals(sorts) {
     const pos = computeEventPortalPosition(index);
 
     if (!rooms[roomId]) {
+      // 活動分類房間預設沒有底圖（顯示預設漸層底圖），但如果管理員之前
+      // 已經透過後台幫這個房間選過底圖並存進狀態檔，這裡要蓋回去，
+      // 不然每次伺服器重啟、這個分類房間重新被建立時又會變回沒有底圖。
+      const persistedBg = (initialBackgroundState.roomBackgrounds || {})[roomId] || null;
       rooms[roomId] = {
         id: roomId,
         name: sort.name,
-        background: null, // 沒有另外指定底圖，前端會顯示預設漸層底圖
+        background: persistedBg, // 沒有另外指定底圖，前端會顯示預設漸層底圖
         portals: [
           // 位置跟大廳最左下角那個傳送點（第一個分類，index 0）一致，
           // 這樣「回大廳」的傳送點視覺上跟玩家記憶中的位置對得起來。
@@ -414,6 +436,74 @@ app.post('/admin/set-brightness', (req, res) => {
 app.get('/admin/background-status', (req, res) => {
   setCorsForAdmin(res);
   res.json({ ok: true, brightness: currentBrightness });
+});
+
+// ---------------------------------------------------------------
+// 各房間底圖管理 API：讓管理頁面可以列出目前有哪些房間、每個房間
+// 目前用哪張底圖，並且針對單一房間指定要用 bg/ 資料夾裡的哪張圖。
+// 檔案本身還是放在 ASP 主機的 bg/ 資料夾（跟 bg_list.asp 用同一份），
+// 這裡只負責記錄「哪個房間要用哪個檔名」。
+// ---------------------------------------------------------------
+
+// 讀取的部分不需要密碼（純讀取，方便管理頁一開啟就能列出房間清單/
+// 目前底圖），套用亮度、清聊天紀錄那些「會改變狀態」的動作才需要密碼。
+app.options('/admin/rooms', (req, res) => {
+  setCorsForAdmin(res);
+  res.sendStatus(204);
+});
+
+app.get('/admin/rooms', (req, res) => {
+  setCorsForAdmin(res);
+  const list = Object.keys(rooms).map((roomId) => ({
+    id: roomId,
+    name: rooms[roomId].name,
+    background: rooms[roomId].background || null
+  }));
+  res.json({ ok: true, rooms: list });
+});
+
+// 檔名格式檢查：只允許英數字、底線、連字號、點，副檔名限定圖片格式，
+// 避免有人把奇怪的字串（例如帶路徑的字串）存進狀態檔或拼進網址裡。
+const BG_FILENAME_RE = /^[A-Za-z0-9._-]+\.(jpg|jpeg|png|webp|gif)$/i;
+
+app.options('/admin/set-room-background', (req, res) => {
+  setCorsForAdmin(res);
+  res.sendStatus(204);
+});
+
+app.post('/admin/set-room-background', (req, res) => {
+  setCorsForAdmin(res);
+  const secret = req.headers['x-admin-secret'] || (req.body && req.body.secret);
+  if (!secret || secret !== ADMIN_SECRET) {
+    return res.status(403).json({ ok: false, error: '密碼錯誤' });
+  }
+
+  const roomId = req.body && req.body.roomId;
+  const room = getRoom(roomId);
+  if (!room) {
+    return res.status(404).json({ ok: false, error: '房間不存在' });
+  }
+
+  // background 傳空字串／null／不帶這個欄位，都視為「恢復成沒有指定底圖
+  // （顯示預設漸層底圖）」；否則就是 bg/ 資料夾裡的檔名。
+  let background = req.body && req.body.background;
+  if (background === null || background === undefined || background === '') {
+    background = null;
+  } else {
+    background = String(background).trim();
+    if (!BG_FILENAME_RE.test(background)) {
+      return res.status(400).json({ ok: false, error: '檔名格式不正確（只接受 bg/ 資料夾裡的圖片檔名）' });
+    }
+  }
+
+  room.background = background;
+  saveBackgroundState();
+
+  // 廣播給「目前在這個房間裡」的玩家立即套用新底圖；其他房間的玩家不受影響。
+  const url = getRoomBackgroundUrl(room);
+  io.to(roomId).emit('room-background-changed', { background: url });
+
+  return res.json({ ok: true, roomId, background, url });
 });
 
 // ---------------------------------------------------------------
