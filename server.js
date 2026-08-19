@@ -248,14 +248,10 @@ function fetchEventApiJson(query) {
   });
 }
 
-// 分類清單（哪些傳送點要顯示在大廳）不常變動，快取久一點；
-// 每個分類底下的活動清單（上架連結）變動較頻繁，快取短一點，
-// 但也不用每次有人進房間就重打一次 ASP。
+// 分類清單（哪些傳送點要顯示在大廳）不常變動，快取久一點。
 const SORTS_CACHE_MS = 5 * 60 * 1000;   // 5 分鐘
-const EVENTS_CACHE_MS = 60 * 1000;      // 1 分鐘
 
 let sortsCache = { data: null, expiresAt: 0 };
-const eventsCache = new Map(); // sortNo -> { data, expiresAt }
 
 async function fetchEventSorts() {
   if (sortsCache.data && sortsCache.expiresAt > Date.now()) return sortsCache.data;
@@ -269,17 +265,21 @@ async function fetchEventSorts() {
   return sortsCache.data || [];
 }
 
-async function fetchEventsForSort(sortNo) {
-  const cached = eventsCache.get(sortNo);
-  if (cached && cached.expiresAt > Date.now()) return cached.data;
-  const result = await fetchEventApiJson(`action=events&sort=${encodeURIComponent(sortNo)}`);
-  if (result.ok && Array.isArray(result.events)) {
-    eventsCache.set(sortNo, { data: result.events, expiresAt: Date.now() + EVENTS_CACHE_MS });
-    return result.events;
-  }
-  console.error(`❌ 取得分類 ${sortNo} 的上架活動失敗：`, result.error || result);
-  return (cached && cached.data) || [];
+// 活動分類房間內的連結：不再逐筆列出資料庫裡每一筆上架活動，
+// 改成點下去直接開啟該分類的報名總覽頁面（signup_main.asp?event_sort_no=N），
+// 頁面裡有哪些活動、上下架狀態都交給那個頁面自己處理，這裡不用再打一次
+// event_api.asp 查活動清單。要改網址規則的話，只要改這個函式就好。
+const SIGNUP_PAGE_URL = process.env.SIGNUP_PAGE_URL || 'https://www.swimlife.tw/signup/signup_main.asp';
+
+function buildEventRoomLinks(sortNo, sortName) {
+  return [
+    {
+      name: `前往「${sortName}」報名頁`,
+      weblink: `${SIGNUP_PAGE_URL}?event_sort_no=${encodeURIComponent(sortNo)}`
+    }
+  ];
 }
+
 
 // 傳送點在場景上的位置：固定放在左下角，由左到右排列。
 // x 從 5% 開始，每個間隔 9%（8 個分類剛好排到約 68%，不會擠到畫面右側）；
@@ -508,7 +508,7 @@ io.on('connection', (socket) => {
 
     // 只回給這位新玩家：完整現況快照（含目前房間的傳送點清單）
     // 如果是活動分類房間，額外附上這個分類目前上架中的活動連結清單
-    const eventLinks = room.isEventRoom ? await fetchEventsForSort(room.sortNo) : null;
+    const eventLinks = room.isEventRoom ? buildEventRoomLinks(room.sortNo, room.name) : null;
 
     socket.emit('init', {
       selfId: id,
@@ -629,7 +629,7 @@ io.on('connection', (socket) => {
     const background = getRoomBackgroundUrl(toRoom);
 
     // 傳送到活動分類房間時，順便帶上該分類目前上架中的活動連結清單
-    const eventLinks = toRoom.isEventRoom ? await fetchEventsForSort(toRoom.sortNo) : null;
+    const eventLinks = toRoom.isEventRoom ? buildEventRoomLinks(toRoom.sortNo, toRoom.name) : null;
 
     // 只回給這位玩家：新房間的完整現況快照
     socket.emit('room-changed', {
