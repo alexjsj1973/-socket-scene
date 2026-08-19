@@ -743,7 +743,7 @@ io.on('connection', (socket) => {
   // ---- 跳躍：純視覺效果，不影響座標，只廣播「誰跳了」給同房間所有人，
   // 讓其他人也能看到動畫；一樣只能觸發自己的角色。做個簡單節流
   // （跟前端的 500ms 動畫時長對齊），避免有人狂送這個事件洗版。
-  const JUMP_MIN_INTERVAL_MS = 450;
+  const JUMP_MIN_INTERVAL_MS = 500;
   socket.on('jump', () => {
     const roomId = socket.data.roomId;
     const id = socket.data.charId;
