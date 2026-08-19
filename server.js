@@ -96,7 +96,7 @@ let currentBrightness = initialBackgroundState.brightness;
 const ROOMS_CONFIG = {
   main: {
     id: 'main',
-    name: '大廳',
+    name: '集會廣場',
     background: 'bg1.jpg',
     portals: [
       { to: 'annex1', x: 5, y: 90, label: '活動報名' },
@@ -108,7 +108,7 @@ const ROOMS_CONFIG = {
     name: '活動報名',
     background: 'bg2.jpg',
     portals: [
-      { to: 'main', x: 10, y: 78, label: '大廳' }
+      { to: 'main', x: 10, y: 78, label: '集會廣場' }
     ]
   },
   annex2: {
@@ -116,7 +116,7 @@ const ROOMS_CONFIG = {
     name: '課程教學',
     background: 'bg3.jpg',
     portals: [
-      { to: 'main', x: 10, y: 78, label: '大廳' }
+      { to: 'main', x: 10, y: 78, label: '集會廣場' }
     ]
   }
 };
@@ -311,7 +311,7 @@ function ensureEventRoomsAndPortals(sorts) {
         portals: [
           // 位置跟大廳最左下角那個傳送點（第一個分類，index 0）一致，
           // 這樣「回大廳」的傳送點視覺上跟玩家記憶中的位置對得起來。
-          { to: DEFAULT_ROOM_ID, x: computeEventPortalPosition(0).x, y: computeEventPortalPosition(0).y, label: '大廳' }
+          { to: DEFAULT_ROOM_ID, x: computeEventPortalPosition(0).x, y: computeEventPortalPosition(0).y, label: '集會廣場' }
         ],
         characters: Object.create(null),
         chatLog: [],
