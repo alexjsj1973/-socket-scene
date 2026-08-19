@@ -217,6 +217,140 @@ function verifyLoginToken(token) {
   });
 }
 
+// ---------------------------------------------------------------
+// 活動分類傳送點：跟 verify_token.asp 一樣，向 ASP 那邊的
+// event_api.asp 做 server-to-server 查詢，取得：
+//   1. 大廳要顯示哪些活動分類傳送點（event_sort 表）
+//   2. 進入某個活動分類房間時，該分類目前上架中的活動連結（event 表）
+//
+// EVENT_API_URL / EVENT_API_KEY 請改成實際部署位置，且 KEY 要跟
+// event_api.asp 裡設定的 API_KEY 完全一致，兩邊都建議改成環境變數。
+// ---------------------------------------------------------------
+const EVENT_API_URL = process.env.EVENT_API_URL || 'https://www.swimlife.tw/alex/game/online/event_api.asp';
+const EVENT_API_KEY = process.env.EVENT_API_KEY || 'a1b2c3d4e5';
+
+function fetchEventApiJson(query) {
+  return new Promise((resolve) => {
+    const url = `${EVENT_API_URL}?${query}&key=${encodeURIComponent(EVENT_API_KEY)}`;
+    https.get(url, (res) => {
+      let body = '';
+      res.on('data', (chunk) => { body += chunk; });
+      res.on('end', () => {
+        try {
+          resolve(JSON.parse(body));
+        } catch (e) {
+          resolve({ ok: false, error: 'event_api.asp 回傳格式錯誤' });
+        }
+      });
+    }).on('error', (err) => {
+      resolve({ ok: false, error: '無法連線到 event_api.asp：' + err.message });
+    });
+  });
+}
+
+// 分類清單（哪些傳送點要顯示在大廳）不常變動，快取久一點；
+// 每個分類底下的活動清單（上架連結）變動較頻繁，快取短一點，
+// 但也不用每次有人進房間就重打一次 ASP。
+const SORTS_CACHE_MS = 5 * 60 * 1000;   // 5 分鐘
+const EVENTS_CACHE_MS = 60 * 1000;      // 1 分鐘
+
+let sortsCache = { data: null, expiresAt: 0 };
+const eventsCache = new Map(); // sortNo -> { data, expiresAt }
+
+async function fetchEventSorts() {
+  if (sortsCache.data && sortsCache.expiresAt > Date.now()) return sortsCache.data;
+  const result = await fetchEventApiJson('action=sorts');
+  if (result.ok && Array.isArray(result.sorts)) {
+    sortsCache = { data: result.sorts, expiresAt: Date.now() + SORTS_CACHE_MS };
+    return result.sorts;
+  }
+  console.error('❌ 取得活動分類清單失敗：', result.error || result);
+  // 拿舊快取撐著（就算過期），總比整個大廳沒有傳送點好
+  return sortsCache.data || [];
+}
+
+async function fetchEventsForSort(sortNo) {
+  const cached = eventsCache.get(sortNo);
+  if (cached && cached.expiresAt > Date.now()) return cached.data;
+  const result = await fetchEventApiJson(`action=events&sort=${encodeURIComponent(sortNo)}`);
+  if (result.ok && Array.isArray(result.events)) {
+    eventsCache.set(sortNo, { data: result.events, expiresAt: Date.now() + EVENTS_CACHE_MS });
+    return result.events;
+  }
+  console.error(`❌ 取得分類 ${sortNo} 的上架活動失敗：`, result.error || result);
+  return (cached && cached.data) || [];
+}
+
+// 傳送點在場景上的位置：固定放在左下角，由左到右排列。
+// x 從 5% 開始，每個間隔 9%（8 個分類剛好排到約 68%，不會擠到畫面右側）；
+// y 固定 90%（貼近底部），跟原本 annex1/annex2 的傳送點同一條基準線。
+function computeEventPortalPosition(index) {
+  return { x: 5 + index * 9, y: 90 };
+}
+
+// 每個傳送點的圖片要用不同顏色：用 CSS hue-rotate 角度區分，
+// 8 個分類平均分散在色環上（360/8=45 度一格），不需要另外準備 8 張圖片。
+function computeEventPortalHue(index) {
+  return (index * 45) % 360;
+}
+
+// 把 event_sort 清單轉成大廳(main)房間要用的傳送點陣列，
+// 同時確保每個分類都有一個對應的 Socket.io 房間可以傳送過去
+// （房間不存在就建立一個，portals 裡固定放一個「回大廳」的傳送點）。
+function ensureEventRoomsAndPortals(sorts) {
+  const portals = [];
+  sorts.forEach((sort, index) => {
+    const roomId = `event_${sort.no}`;
+    const pos = computeEventPortalPosition(index);
+
+    if (!rooms[roomId]) {
+      rooms[roomId] = {
+        id: roomId,
+        name: sort.name,
+        background: null, // 沒有另外指定底圖，前端會顯示預設漸層底圖
+        portals: [
+          { to: DEFAULT_ROOM_ID, x: 10, y: 78, label: '大廳' }
+        ],
+        characters: Object.create(null),
+        chatLog: [],
+        isEventRoom: true,
+        sortNo: sort.no
+      };
+    } else {
+      // 分類名稱可能之後在後台改過，房間名稱跟著更新
+      rooms[roomId].name = sort.name;
+      rooms[roomId].sortNo = sort.no;
+    }
+
+    portals.push({
+      to: roomId,
+      x: pos.x,
+      y: pos.y,
+      label: sort.name,
+      hue: computeEventPortalHue(index)
+    });
+  });
+  return portals;
+}
+
+// 啟動時先抓一次，之後背景定期刷新（分類新增/改名不用重新部署就會生效）。
+// 大廳原本設定裡的 annex1/annex2 傳送點是舊的示範資料，這裡直接把它們
+// 換掉，改成完全由資料庫 event_sort 表驅動；如果還想保留 annex1/annex2，
+// 把下面這行的 `= eventPortals` 改成 `.push(...eventPortals)` 即可。
+async function refreshEventPortals() {
+  const sorts = await fetchEventSorts();
+  if (!sorts || sorts.length === 0) return;
+  const eventPortals = ensureEventRoomsAndPortals(sorts);
+  const mainRoom = getRoom(DEFAULT_ROOM_ID);
+  if (mainRoom) {
+    mainRoom.portals = eventPortals;
+  }
+}
+
+const EVENT_PORTALS_REFRESH_MS = 5 * 60 * 1000; // 5 分鐘重新整理一次
+refreshEventPortals();
+setInterval(refreshEventPortals, EVENT_PORTALS_REFRESH_MS);
+
 function setCorsForAdmin(res) {
   res.header('Access-Control-Allow-Origin', '*');
   res.header('Access-Control-Allow-Methods', 'POST, OPTIONS');
@@ -364,7 +498,16 @@ io.on('connection', (socket) => {
     // 這裡直接組出網址即可，不用再隨機挑。
     const background = getRoomBackgroundUrl(room);
 
+    // 「記錄 event_sort_no」：把目前所在活動分類記在這條連線自己的
+    // socket.data 上（等同這個玩家這次連線的 session），非活動房間
+    // （例如大廳）就是 null。之後這條連線不管做什麼動作，都可以透過
+    // socket.data.eventSortNo 知道「他現在是在哪個活動分類房間裡」。
+    socket.data.eventSortNo = room.sortNo || null;
+
     // 只回給這位新玩家：完整現況快照（含目前房間的傳送點清單）
+    // 如果是活動分類房間，額外附上這個分類目前上架中的活動連結清單
+    const eventLinks = room.isEventRoom ? await fetchEventsForSort(room.sortNo) : null;
+
     socket.emit('init', {
       selfId: id,
       roomId: room.id,
@@ -373,7 +516,8 @@ io.on('connection', (socket) => {
       characters: Object.values(room.characters),
       chatLog: room.chatLog,
       background,
-      brightness: currentBrightness
+      brightness: currentBrightness,
+      eventLinks
     });
 
     // 廣播給同房間的其他人：有新角色加入
@@ -435,7 +579,7 @@ io.on('connection', (socket) => {
   });
 
   // ---- 傳送到另一個房間：點了場景裡的傳送點道具才會觸發 ----
-  socket.on('teleport', (data) => {
+  socket.on('teleport', async (data) => {
     const fromRoomId = socket.data.roomId;
     const id = socket.data.charId;
     const fromRoom = getRoom(fromRoomId);
@@ -476,8 +620,14 @@ io.on('connection', (socket) => {
     socket.join(toRoomId);
     socket.data.roomId = toRoomId;
 
+    // 更新這條連線的「目前活動分類」記錄（見 join 事件裡的說明）
+    socket.data.eventSortNo = toRoom.sortNo || null;
+
     // 新房間的場景底圖固定用它自己設定的那張，跟 join 邏輯一致
     const background = getRoomBackgroundUrl(toRoom);
+
+    // 傳送到活動分類房間時，順便帶上該分類目前上架中的活動連結清單
+    const eventLinks = toRoom.isEventRoom ? await fetchEventsForSort(toRoom.sortNo) : null;
 
     // 只回給這位玩家：新房間的完整現況快照
     socket.emit('room-changed', {
@@ -488,7 +638,8 @@ io.on('connection', (socket) => {
       characters: Object.values(toRoom.characters),
       chatLog: toRoom.chatLog,
       background,
-      brightness: currentBrightness
+      brightness: currentBrightness,
+      eventLinks
     });
 
     // 廣播給新房間的其他人：有角色傳送進來了
