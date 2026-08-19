@@ -15,23 +15,70 @@ const app = express();
 const server = http.createServer(app);
 
 // ---------------------------------------------------------------
-// 場景底圖照片：每個房間固定使用一張指定的圖片（檔名在下面的
-// ROOMS_CONFIG 裡設定），不再像之前那樣每次 join 隨機從 bg/ 資料夾裡
-// 挑一張。圖片一樣是放在 ASP 主機的 bg/ 資料夾（用 FTP 或空間商的檔案
-// 總管上傳即可），這裡只是組出完整網址。
-//
-// 注意：bg_list.asp 現在只有前端「場景調整 → 場景底圖」選單在用（讓玩家
-// 自己手動瀏覽 bg/ 資料夾裡所有圖片、換成自己想要的），跟這裡「房間固定
-// 底圖」是兩件獨立的事，互不影響。
+// 場景底圖照片：每個房間可以在後台指定固定使用哪一張圖片（存在下面
+// ROOMS_CONFIG 或 background-state.json 裡的 background 欄位）；沒有
+// 指定的房間，預設改成從 bg/ 資料夾裡隨機挑一張「檔名開頭為 bg、副檔名
+// 為 .jpg」的圖片（每次玩家 join / 傳送到該房間都會重新抽一次）。
+// 圖片一樣是放在 ASP 主機的 bg/ 資料夾（用 FTP 或空間商的檔案總管上傳
+// 即可），這裡只是組出完整網址。
 // ---------------------------------------------------------------
 const BG_FOLDER_URL = 'https://www.swimlife.tw/alex/game/online/bg/';
 
-// 取得某個房間固定底圖的完整網址；房間沒設定 background 就回傳 null
-// （前端看到 null 會顯示預設的漸層天空+草地底圖）。
-function getRoomBackgroundUrl(room) {
-  if (!room || !room.background) return null;
+// bg_list.asp：回傳 bg/ 資料夾裡目前有哪些圖檔（見 bg_list.asp 本身的說明），
+// 這裡用來實作「房間沒有指定底圖時，預設從 bg/ 隨機挑一張開頭為 bg 的 jpg
+// 圖片」。清單短時間內快取一下，避免每次有人 join / 傳送就打一次 ASP。
+const BG_LIST_URL = 'https://www.swimlife.tw/alex/game/online/bg_list.asp';
+const BG_LIST_CACHE_MS = 60 * 1000; // 1 分鐘，admin 上傳新圖後最多等這麼久才會被抽到
+let bgListCache = { files: null, expiresAt: 0 };
+
+function fetchBgFileList() {
+  return new Promise((resolve) => {
+    if (bgListCache.files && bgListCache.expiresAt > Date.now()) {
+      return resolve(bgListCache.files);
+    }
+    https.get(BG_LIST_URL, (res) => {
+      let body = '';
+      res.on('data', (chunk) => { body += chunk; });
+      res.on('end', () => {
+        let files = [];
+        try {
+          const parsed = JSON.parse(body);
+          if (parsed && parsed.ok && Array.isArray(parsed.files)) files = parsed.files;
+        } catch (e) {
+          // bg_list.asp 掛掉或回傳格式錯誤，就當作沒有清單，維持空陣列
+        }
+        bgListCache = { files, expiresAt: Date.now() + BG_LIST_CACHE_MS };
+        resolve(files);
+      });
+    }).on('error', () => {
+      // 連不到 bg_list.asp：不快取失敗結果，讓下一次呼叫可以重試
+      resolve(bgListCache.files || []);
+    });
+  });
+}
+
+// 從 bg/ 資料夾的清單裡，篩出「檔名開頭是 bg、副檔名是 .jpg」的圖片，
+// 隨機挑一張回傳檔名；沒有符合的圖片就回傳 null（前端會顯示預設漸層底圖）。
+async function pickRandomDefaultBg() {
+  const files = await fetchBgFileList();
+  const candidates = files.filter((name) => /^bg/i.test(name) && /\.jpg$/i.test(name));
+  if (candidates.length === 0) return null;
+  return candidates[Math.floor(Math.random() * candidates.length)];
+}
+
+// 取得某個房間目前該用哪張底圖的完整網址：
+// - 房間有指定 background（管理員在後台選過）→ 用那張
+// - 沒指定 → 從 bg/ 資料夾裡隨機挑一張「bg 開頭的 .jpg」當預設底圖；
+//   如果連一張符合的圖都找不到，才退回 null（前端顯示預設漸層底圖）
+async function getRoomBackgroundUrl(room) {
+  if (!room) return null;
+  let filename = room.background;
+  if (!filename) {
+    filename = await pickRandomDefaultBg();
+    if (!filename) return null;
+  }
   // 加上 ?v=時間戳 做 cache-busting，避免玩家瀏覽器快取到舊圖片
-  return `${BG_FOLDER_URL}${room.background}?v=${Date.now()}`;
+  return `${BG_FOLDER_URL}${filename}?v=${Date.now()}`;
 }
 
 // ---------------------------------------------------------------
@@ -96,8 +143,10 @@ let currentBrightness = initialBackgroundState.brightness;
 // to 是點下去要去的房間 id，label 是顯示給玩家看的文字（要去哪裡）。
 //
 // background：這個房間固定使用哪一張底圖，填 bg/ 資料夾裡的檔名就好
-// （程式會自動接上 BG_FOLDER_URL），不用整段網址。沒有填的話前端會顯示
-// 預設的漸層天空+草地底圖。
+// （程式會自動接上 BG_FOLDER_URL），不用整段網址。沒有填（或留 null）的話，
+// 改成從 bg/ 資料夾隨機挑一張「檔名開頭為 bg、副檔名為 .jpg」的圖片當底圖
+// （每次玩家 join / 傳送到這個房間都會重新抽一次，不是固定同一張）；
+// 如果 bg/ 裡連一張符合的圖都沒有，才會顯示前端預設的漸層天空+草地底圖。
 //
 // 要新增房間或傳送點，直接在下面加一筆就好；不需要動到其他程式邏輯。
 // 記得幫新房間也設定「回程」的傳送點，不然玩家進去後就出不來了。
@@ -471,7 +520,7 @@ app.options('/admin/set-room-background', (req, res) => {
   res.sendStatus(204);
 });
 
-app.post('/admin/set-room-background', (req, res) => {
+app.post('/admin/set-room-background', async (req, res) => {
   setCorsForAdmin(res);
   const secret = req.headers['x-admin-secret'] || (req.body && req.body.secret);
   if (!secret || secret !== ADMIN_SECRET) {
@@ -484,8 +533,9 @@ app.post('/admin/set-room-background', (req, res) => {
     return res.status(404).json({ ok: false, error: '房間不存在' });
   }
 
-  // background 傳空字串／null／不帶這個欄位，都視為「恢復成沒有指定底圖
-  // （顯示預設漸層底圖）」；否則就是 bg/ 資料夾裡的檔名。
+  // background 傳空字串／null／不帶這個欄位，都視為「恢復成沒有指定底圖」，
+  // 也就是改回預設行為：從 bg/ 資料夾隨機挑一張 bg 開頭的 jpg（不是漸層
+  // 底圖了，見 getRoomBackgroundUrl 說明）；否則就是 bg/ 資料夾裡的檔名。
   let background = req.body && req.body.background;
   if (background === null || background === undefined || background === '') {
     background = null;
@@ -500,7 +550,7 @@ app.post('/admin/set-room-background', (req, res) => {
   saveBackgroundState();
 
   // 廣播給「目前在這個房間裡」的玩家立即套用新底圖；其他房間的玩家不受影響。
-  const url = getRoomBackgroundUrl(room);
+  const url = await getRoomBackgroundUrl(room);
   io.to(roomId).emit('room-background-changed', { background: url });
 
   return res.json({ ok: true, roomId, background, url });
@@ -627,9 +677,9 @@ io.on('connection', (socket) => {
     socket.data.roomId = roomId;
     socket.join(roomId);
 
-    // 場景底圖：這個房間固定用哪張圖，在 ROOMS_CONFIG 裡設定好了，
-    // 這裡直接組出網址即可，不用再隨機挑。
-    const background = getRoomBackgroundUrl(room);
+    // 場景底圖：房間有在後台指定就用那張，沒指定就從 bg/ 隨機挑一張
+    // 「bg 開頭的 .jpg」當預設底圖（見 getRoomBackgroundUrl 說明）。
+    const background = await getRoomBackgroundUrl(room);
 
     // 「記錄 event_sort_no」：把目前所在活動分類記在這條連線自己的
     // socket.data 上（等同這個玩家這次連線的 session），非活動房間
@@ -766,8 +816,8 @@ io.on('connection', (socket) => {
     // 更新這條連線的「目前活動分類」記錄（見 join 事件裡的說明）
     socket.data.eventSortNo = toRoom.sortNo || null;
 
-    // 新房間的場景底圖固定用它自己設定的那張，跟 join 邏輯一致
-    const background = getRoomBackgroundUrl(toRoom);
+    // 新房間的場景底圖，跟 join 邏輯一致（見 getRoomBackgroundUrl 說明）
+    const background = await getRoomBackgroundUrl(toRoom);
 
     // 傳送到活動分類房間時，順便帶上該分類目前上架中的活動連結清單
     const eventLinks = toRoom.isEventRoom ? buildEventRoomLinks(toRoom.sortNo, toRoom.name) : null;
