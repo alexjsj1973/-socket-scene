@@ -57,24 +57,37 @@ function fetchBgFileList() {
   });
 }
 
-// 從 bg/ 資料夾的清單裡，篩出「檔名開頭是 bg、副檔名是 .jpg」的圖片，
-// 隨機挑一張回傳檔名；沒有符合的圖片就回傳 null（前端會顯示預設漸層底圖）。
-async function pickRandomDefaultBg() {
+// 從 bg/ 資料夾的清單裡，篩出「檔名開頭是指定 prefix、副檔名是 .jpg」的
+// 圖片，隨機挑一張回傳檔名；沒有符合的圖片就回傳 null（前端會顯示預設
+// 漸層底圖）。prefix 預設為 'bg'。
+async function pickRandomDefaultBg(prefix) {
+  const p = prefix || 'bg';
   const files = await fetchBgFileList();
-  const candidates = files.filter((name) => /^bg/i.test(name) && /\.jpg$/i.test(name));
+  const re = new RegExp('^' + p, 'i');
+  const candidates = files.filter((name) => re.test(name) && /\.jpg$/i.test(name));
   if (candidates.length === 0) return null;
   return candidates[Math.floor(Math.random() * candidates.length)];
 }
 
+// 房間沒有指定固定底圖時，預設要從 bg/ 隨機挑「哪個字首開頭」的圖：
+// 「菁英計畫」這個分類房間用 sp 開頭，其他所有房間一律用 bg 開頭。
+// 用房間名稱判斷，之後如果分類名稱在後台改了，這裡也要跟著改。
+function defaultBgPrefixForRoom(room) {
+  if (room && room.name === '菁英計畫') return 'sp';
+  return 'bg';
+}
+
 // 取得某個房間目前該用哪張底圖的完整網址：
+// - 集會廣場（main）固定用 room1.jpg（見 ROOMS_CONFIG）
 // - 房間有指定 background（管理員在後台選過）→ 用那張
-// - 沒指定 → 從 bg/ 資料夾裡隨機挑一張「bg 開頭的 .jpg」當預設底圖；
+// - 沒指定 → 從 bg/ 資料夾裡隨機挑一張當預設底圖，字首依
+//   defaultBgPrefixForRoom 決定（菁英計畫用 sp，其他房間用 bg）；
 //   如果連一張符合的圖都找不到，才退回 null（前端顯示預設漸層底圖）
 async function getRoomBackgroundUrl(room) {
   if (!room) return null;
   let filename = room.background;
   if (!filename) {
-    filename = await pickRandomDefaultBg();
+    filename = await pickRandomDefaultBg(defaultBgPrefixForRoom(room));
     if (!filename) return null;
   }
   // 加上 ?v=時間戳 做 cache-busting，避免玩家瀏覽器快取到舊圖片
@@ -164,7 +177,7 @@ const ROOMS_CONFIG = {
   annex1: {
     id: 'annex1',
     name: '活動報名',
-    background: 'bg2.jpg',
+    background: null, // 沒指定 → 隨機挑一張 bg 開頭的 jpg（見 getRoomBackgroundUrl）
     portals: [
       { to: 'main', x: 10, y: 78, label: '集會廣場' }
     ]
@@ -172,7 +185,7 @@ const ROOMS_CONFIG = {
   annex2: {
     id: 'annex2',
     name: '課程教學',
-    background: 'bg3.jpg',
+    background: null, // 沒指定 → 隨機挑一張 bg 開頭的 jpg（見 getRoomBackgroundUrl）
     portals: [
       { to: 'main', x: 10, y: 78, label: '集會廣場' }
     ]
@@ -371,14 +384,16 @@ function ensureEventRoomsAndPortals(sorts) {
     const pos = computeEventPortalPosition(index);
 
     if (!rooms[roomId]) {
-      // 活動分類房間預設沒有底圖（顯示預設漸層底圖），但如果管理員之前
-      // 已經透過後台幫這個房間選過底圖並存進狀態檔，這裡要蓋回去，
-      // 不然每次伺服器重啟、這個分類房間重新被建立時又會變回沒有底圖。
+      // 活動分類房間預設沒有指定固定底圖，會改用 getRoomBackgroundUrl 的
+      // 隨機邏輯（一般分類隨機挑 bg 開頭的 jpg，「菁英計畫」隨機挑 sp
+      // 開頭的 jpg，見 defaultBgPrefixForRoom）。但如果管理員之前已經
+      // 透過後台幫這個房間選過固定底圖並存進狀態檔，這裡要蓋回去，
+      // 不然每次伺服器重啟、這個分類房間重新被建立時又會變回沒有指定。
       const persistedBg = (initialBackgroundState.roomBackgrounds || {})[roomId] || null;
       rooms[roomId] = {
         id: roomId,
         name: sort.name,
-        background: persistedBg, // 沒有另外指定底圖，前端會顯示預設漸層底圖
+        background: persistedBg, // 沒有另外指定底圖時，套用隨機底圖邏輯
         portals: [
           // 位置跟大廳最左下角那個傳送點（第一個分類，index 0）一致，
           // 這樣「回大廳」的傳送點視覺上跟玩家記憶中的位置對得起來。
