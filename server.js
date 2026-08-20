@@ -374,6 +374,89 @@ function computeEventPortalHue(index) {
   return (index * 45) % 360;
 }
 
+// ---------------------------------------------------------------
+// 「捏一捏 -> 身體選擇與皮膚調整」：跟 verify_token.asp / event_api.asp
+// 一樣，向 ASP 那邊的 character_api.asp 做 server-to-server 存取，
+// 全程用 member_no（= verifyLoginToken 回傳的 memberId）當關聯 key，
+// 瀏覽器端完全不會、也不需要直接打到 ASP。
+//
+// CHARACTER_API_URL / CHARACTER_API_KEY 請改成實際部署位置，且 KEY 要跟
+// character_api.asp 裡設定的 API_KEY 完全一致，兩邊都建議改成環境變數。
+// ---------------------------------------------------------------
+const CHARACTER_API_URL = process.env.CHARACTER_API_URL || 'https://www.swimlife.tw/alex/game/online/character_api.asp';
+const CHARACTER_API_KEY = process.env.CHARACTER_API_KEY || 'a1b2c3d4e5';
+
+const HEX_COLOR_STRICT_RE = /^#[0-9a-fA-F]{6}$/;
+
+// 讀取某會員目前的身體部位設定 + 膚色（GET action=get）
+function fetchCharacterCustomization(memberNo) {
+  return new Promise((resolve) => {
+    const url = `${CHARACTER_API_URL}?action=get&member_no=${encodeURIComponent(memberNo)}&key=${encodeURIComponent(CHARACTER_API_KEY)}`;
+    https.get(url, (res) => {
+      let body = '';
+      res.on('data', (chunk) => { body += chunk; });
+      res.on('end', () => {
+        try {
+          resolve(JSON.parse(body));
+        } catch (e) {
+          resolve({ ok: false, error: 'character_api.asp 回傳格式錯誤' });
+        }
+      });
+    }).on('error', (err) => {
+      resolve({ ok: false, error: '無法連線到 character_api.asp：' + err.message });
+    });
+  });
+}
+
+// 存檔（POST action=save）：body part 陣列在這裡組成 ASP 那邊要解析的
+// "CODE,visible,hex|CODE2,visible,hex2" 字串，欄位驗證（hex 格式、
+// visible 只能 0/1）在送出前先做一次，ASP 那邊也會再驗證一次。
+function saveCharacterCustomization(memberNo, skinColorId, parts) {
+  return new Promise((resolve) => {
+    const partsStr = (Array.isArray(parts) ? parts : [])
+      .filter((p) => p && typeof p.code === 'string' && /^[A-Z0-9_]{1,30}$/.test(p.code))
+      .map((p) => {
+        const visible = p.visible ? '1' : '0';
+        const hex = HEX_COLOR_STRICT_RE.test(p.colorHex) ? p.colorHex : '';
+        return `${p.code},${visible},${hex}`;
+      })
+      .join('|');
+
+    const form = new URLSearchParams({
+      member_no: String(memberNo),
+      skin_color_id: String(skinColorId),
+      parts: partsStr,
+      key: CHARACTER_API_KEY
+    }).toString();
+
+    const target = new URL(`${CHARACTER_API_URL}?action=save`);
+    const req = https.request({
+      hostname: target.hostname,
+      path: target.pathname + target.search,
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Content-Length': Buffer.byteLength(form)
+      }
+    }, (res) => {
+      let body = '';
+      res.on('data', (chunk) => { body += chunk; });
+      res.on('end', () => {
+        try {
+          resolve(JSON.parse(body));
+        } catch (e) {
+          resolve({ ok: false, error: 'character_api.asp 回傳格式錯誤' });
+        }
+      });
+    });
+    req.on('error', (err) => {
+      resolve({ ok: false, error: '無法連線到 character_api.asp：' + err.message });
+    });
+    req.write(form);
+    req.end();
+  });
+}
+
 // 把 event_sort 清單轉成大廳(main)房間要用的傳送點陣列，
 // 同時確保每個分類都有一個對應的 Socket.io 房間可以傳送過去
 // （房間不存在就建立一個，portals 裡固定放一個「回大廳」的傳送點）。
@@ -696,6 +779,15 @@ io.on('connection', (socket) => {
     // 「bg 開頭的 .jpg」當預設底圖（見 getRoomBackgroundUrl 說明）。
     const background = await getRoomBackgroundUrl(room);
 
+    // 「捏一捏 -> 身體選擇與皮膚調整」：這位會員之前存過的設定，
+    // 跟底圖一樣，一次跟著 init 快照送給前端，不用前端另外再要一次。
+    // 拿不到（ASP 掛掉等等）就送 null，前端會顯示預設值，不影響進場景。
+    const charCustomResult = await fetchCharacterCustomization(memberId);
+    const bodyCustomization = charCustomResult && charCustomResult.ok ? charCustomResult : null;
+    if (!bodyCustomization) {
+      console.error('❌ 取得會員身體設定失敗：', charCustomResult && charCustomResult.error);
+    }
+
     // 「記錄 event_sort_no」：把目前所在活動分類記在這條連線自己的
     // socket.data 上（等同這個玩家這次連線的 session），非活動房間
     // （例如大廳）就是 null。之後這條連線不管做什麼動作，都可以透過
@@ -715,7 +807,8 @@ io.on('connection', (socket) => {
       chatLog: room.chatLog,
       background,
       brightness: currentBrightness,
-      eventLinks
+      eventLinks,
+      bodyCustomization
     });
 
     // 廣播給同房間的其他人：有新角色加入
@@ -774,6 +867,26 @@ io.on('connection', (socket) => {
       shadowColor: room.characters[id].shadowColor || DEFAULT_SHADOW_COLOR,
       glowColor: room.characters[id].glowColor || DEFAULT_GLOW_COLOR
     });
+  });
+
+  // ---- 捏一捏：身體選擇與皮膚調整（存檔） ----
+  // 跟其他動作一樣，一律只認這條連線自己的 socket.data.memberId
+  // （join 成功時就設定好了，等於已經驗證過登入 token），不採信前端
+  // 額外送上來的任何會員編號，避免有人改 DOM / 改封包幫別人存檔。
+  // 存到 ASP/資料庫之後，把最新狀態原樣送回這個玩家，讓面板同步顯示。
+  socket.on('save-body-customization', async (data) => {
+    const memberId = socket.data.memberId;
+    if (!memberId || !socket.data.charId) {
+      socket.emit('body-customization-saved', { ok: false, error: '尚未加入場景，無法存檔' });
+      return;
+    }
+    if (!data || !Number.isFinite(Number(data.skinColorId))) {
+      socket.emit('body-customization-saved', { ok: false, error: '膚色資料不正確' });
+      return;
+    }
+    const parts = Array.isArray(data.parts) ? data.parts.slice(0, 50) : [];
+    const result = await saveCharacterCustomization(memberId, Number(data.skinColorId), parts);
+    socket.emit('body-customization-saved', result);
   });
 
   // ---- 改名：只能改自己的 ----
