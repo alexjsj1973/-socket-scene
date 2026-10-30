@@ -295,9 +295,10 @@ const SCENE_LAYOUTS = {
       { src: 'plaza/olive.png', x: 68.88, y: 68.262, w: 10.417, h: 21.094, baseline: [[68.5, 88.5], [79.5, 88.5]] },
       { src: 'plaza/left.png', x: 9.44, y: 80.176, w: 11.328, h: 12.402, baseline: [[9, 92], [21, 92]] }
     ],
-    // 傳送點位置：咖啡廳樓梯口、左側木門、後方拱門、右後拱門、街機店門口、
-    // 露台欄杆旁、下方階梯、左下空地
-    portalSlots: [[17.06, 47.66], [18.6, 43.6], [27.99, 39.26], [61.2, 36.91], [79.43, 55.47], [76.82, 68.36], [39.06, 90.33], [11.07, 78.12]],
+    // 傳送點位置（依活動分類順序）：咖啡廳樓梯口、左後拱門、後方中央、右後拱門、
+    // 街機店門口、右側空地、下方階梯、左側空地。彼此保持距離，名稱標籤才不會重疊，
+    // 也避開前景盆栽（不然標籤會被遮住）
+    portalSlots: [[17.06, 48.83], [28.65, 39.55], [44.92, 34.67], [61.2, 36.91], [79.43, 55.47], [65.1, 62.5], [39.06, 89.36], [21.48, 74.22]],
     // 時間光照：底圖本身是「黃昏」，另外準備清晨 / 白天 / 夜晚三個版本
     // （scene/plaza/dawn.jpg、day.jpg、night.jpg），前景遮擋圖也各有一份
     // （例如 tree_night.png）。前端依玩家電腦的本地時間在版本之間淡入淡出。
@@ -723,6 +724,88 @@ function saveCharacterCustomization(memberNo, skinColorId, parts) {
   });
 }
 
+// ---------------------------------------------------------------
+// 紙娃娃角色（figure/doll/）：玩家選 1 位角色 + 5 個部位的顏色
+//   doll = { character: 'female_03', colors: { hair, skin, top, bottom, shoes } }
+//   顏色是 #RRGGBB，或 null（= 使用角色原本的顏色）
+// 存在資料庫 dbo.game_UserDoll，透過 character_api.asp 的 getdoll / savedoll 讀寫。
+// 新增角色時：把圖放進 figure/doll/、更新 manifest.json，並把代碼加進下面這個清單。
+// ---------------------------------------------------------------
+const DOLL_CHARACTERS = [
+  'female_01', 'female_02', 'female_03', 'female_04', 'female_05',
+  'male_01', 'male_02', 'male_03', 'male_04', 'male_05'
+];
+const DOLL_PARTS = ['hair', 'skin', 'top', 'bottom', 'shoes'];
+
+// 驗證並整理前端送來的紙娃娃設定，不合法回傳 null
+function sanitizeDoll(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  if (!DOLL_CHARACTERS.includes(raw.character)) return null;
+  const colors = {};
+  const src = (raw.colors && typeof raw.colors === 'object') ? raw.colors : {};
+  DOLL_PARTS.forEach((part) => {
+    colors[part] = HEX_COLOR_STRICT_RE.test(src[part]) ? String(src[part]).toUpperCase() : null;
+  });
+  return { character: raw.character, colors };
+}
+
+// 讀取會員的紙娃娃設定：{ ok:true, doll:null|{...} } 或 { ok:false, error }
+function fetchDoll(memberNo) {
+  return new Promise((resolve) => {
+    const url = `${CHARACTER_API_URL}?action=getdoll&member_no=${encodeURIComponent(memberNo)}&key=${encodeURIComponent(CHARACTER_API_KEY)}`;
+    https.get(url, (res) => {
+      let body = '';
+      res.on('data', (chunk) => { body += chunk; });
+      res.on('end', () => {
+        try {
+          const parsed = JSON.parse(body);
+          if (!parsed || !parsed.ok) return resolve({ ok: false, error: (parsed && parsed.error) || 'getdoll 失敗' });
+          resolve({ ok: true, doll: parsed.doll ? sanitizeDoll(parsed.doll) : null });
+        } catch (e) {
+          resolve({ ok: false, error: 'character_api.asp（getdoll）回傳格式錯誤' });
+        }
+      });
+    }).on('error', (err) => {
+      resolve({ ok: false, error: '無法連線到 character_api.asp：' + err.message });
+    });
+  });
+}
+
+// 儲存會員的紙娃娃設定（doll 必須先經過 sanitizeDoll）
+function saveDoll(memberNo, doll) {
+  return new Promise((resolve) => {
+    const fields = { member_no: String(memberNo), character: doll.character, key: CHARACTER_API_KEY };
+    DOLL_PARTS.forEach((part) => { fields[part] = doll.colors[part] || ''; });
+    const form = new URLSearchParams(fields).toString();
+    const target = new URL(`${CHARACTER_API_URL}?action=savedoll`);
+    const req = https.request({
+      hostname: target.hostname,
+      path: target.pathname + target.search,
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Content-Length': Buffer.byteLength(form)
+      }
+    }, (res) => {
+      let body = '';
+      res.on('data', (chunk) => { body += chunk; });
+      res.on('end', () => {
+        try {
+          const parsed = JSON.parse(body);
+          resolve(parsed && parsed.ok ? { ok: true } : { ok: false, error: (parsed && parsed.error) || 'savedoll 失敗' });
+        } catch (e) {
+          resolve({ ok: false, error: 'character_api.asp（savedoll）回傳格式錯誤' });
+        }
+      });
+    });
+    req.on('error', (err) => {
+      resolve({ ok: false, error: '無法連線到 character_api.asp：' + err.message });
+    });
+    req.write(form);
+    req.end();
+  });
+}
+
 // 把 event_sort 清單轉成大廳(main)房間要用的傳送點陣列，
 // 同時確保每個分類都有一個對應的 Socket.io 房間可以傳送過去
 // （房間不存在就建立一個，portals 裡固定放一個「回大廳」的傳送點）。
@@ -993,7 +1076,17 @@ io.on('connection', (socket) => {
   socket.on('check-token', async (data) => {
     const verify = await verifyLoginToken(data && data.token);
     if (verify.ok) {
-      socket.emit('token-checked', { ok: true, displayName: verify.displayName });
+      // 順便帶上這位會員存過的紙娃娃設定：
+      //   dollStatus = 'saved'（有存過，前端直接用它進場）/ 'none'（第一次，必須先選角色）
+      //   / 'error'（資料庫讀不到，前端仍讓玩家選角色進場）
+      const dollResult = await fetchDoll(verify.memberId);
+      if (!dollResult.ok) console.error('❌ 讀取紙娃娃設定失敗：', dollResult.error);
+      socket.emit('token-checked', {
+        ok: true,
+        displayName: verify.displayName,
+        doll: dollResult.ok ? dollResult.doll : null,
+        dollStatus: dollResult.ok ? (dollResult.doll ? 'saved' : 'none') : 'error'
+      });
     } else {
       socket.emit('token-checked', { ok: false, error: verify.error || '登入已過期，請重新登入' });
     }
@@ -1019,6 +1112,24 @@ io.on('connection', (socket) => {
     // 每次登入都不一樣，同一個會員不管開幾個分頁重新登入，memberId 都相同，
     // 可以拿來判斷「這個人是不是已經在別的地方上線了」。
     const memberId = verify.memberId;
+
+    // ---- 紙娃娃：一定要有角色才能進場 ----
+    // 資料庫有存過就用存的；沒有的話用這次前端送來的（第一次選角），並存進資料庫。
+    // 兩邊都沒有 → 回 join-error（needDoll），前端會打開選角畫面。
+    const requestedDoll = sanitizeDoll(data && data.doll);
+    const storedDoll = await fetchDoll(memberId);
+    let doll = (storedDoll.ok && storedDoll.doll) ? storedDoll.doll : null;
+    if (requestedDoll && (data && data.dollChanged)) doll = requestedDoll;   // 玩家剛在選角畫面改過
+    if (!doll) doll = requestedDoll;
+    if (!doll) {
+      socket.emit('join-error', { error: '請先選擇角色', needDoll: true });
+      return;
+    }
+    if (!(storedDoll.ok && storedDoll.doll) || (data && data.dollChanged)) {
+      saveDoll(memberId, doll).then((r) => { if (!r.ok) console.error('❌ 儲存紙娃娃設定失敗：', r.error); });
+    }
+    if (socket.data.charId) return;
+
     const existingSocketId = onlineMembers.get(memberId);
     if (existingSocketId && existingSocketId !== socket.id) {
       // 策略一（目前採用）：新登入為主，把舊連線踢掉 ------------------
@@ -1051,6 +1162,7 @@ io.on('connection', (socket) => {
       body,
       shadowColor,
       glowColor,
+      doll,
       x: 20 + Math.random() * 60,
       y: 30 + Math.random() * 50,
       ownerSocketId: socket.id
@@ -1079,11 +1191,8 @@ io.on('connection', (socket) => {
     // 「捏一捏 -> 身體選擇與皮膚調整」：這位會員之前存過的設定，
     // 跟底圖一樣，一次跟著 init 快照送給前端，不用前端另外再要一次。
     // 拿不到（ASP 掛掉等等）就送 null，前端會顯示預設值，不影響進場景。
-    const charCustomResult = await fetchCharacterCustomization(memberId);
-    const bodyCustomization = charCustomResult && charCustomResult.ok ? charCustomResult : null;
-    if (!bodyCustomization) {
-      console.error('❌ 取得會員身體設定失敗：', charCustomResult && charCustomResult.error);
-    }
+    // （舊版「捏一捏」身體部位設定已改成紙娃娃，doll 直接放在角色物件裡）
+    const bodyCustomization = null;
 
     // 「記錄 event_sort_no」：把目前所在活動分類記在這條連線自己的
     // socket.data 上（等同這個玩家這次連線的 session），非活動房間
@@ -1200,6 +1309,28 @@ io.on('connection', (socket) => {
     const parts = Array.isArray(data.parts) ? data.parts.slice(0, 50) : [];
     const result = await saveCharacterCustomization(memberId, Number(data.skinColorId), parts);
     socket.emit('body-customization-saved', result);
+  });
+
+  // ---- 紙娃娃：進場後換角色 / 換顏色 ----
+  // 只能改自己的角色；驗證後更新記憶體中的角色、廣播給同房間，再存進資料庫。
+  socket.on('update-doll', async (data) => {
+    const roomId = socket.data.roomId;
+    const id = socket.data.charId;
+    const room = getRoom(roomId);
+    const memberId = socket.data.memberId;
+    if (!room || !id || !room.characters[id] || !memberId) return;
+    const now = Date.now();
+    if (socket.data.lastDollAt && now - socket.data.lastDollAt < 300) return;   // 簡單節流
+    socket.data.lastDollAt = now;
+    const doll = sanitizeDoll(data && data.doll);
+    if (!doll) {
+      socket.emit('doll-saved', { ok: false, error: '角色資料不正確' });
+      return;
+    }
+    room.characters[id].doll = doll;
+    io.to(roomId).emit('char-doll-changed', { id, doll });
+    const result = await saveDoll(memberId, doll);
+    socket.emit('doll-saved', result);
   });
 
   // ---- 改名：只能改自己的 ----
