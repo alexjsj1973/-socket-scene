@@ -168,7 +168,9 @@ const ROOMS_CONFIG = {
   main: {
     id: 'main',
     name: '集會廣場',
-    background: 'room1.jpg',
+    // 大廳底圖：地中海風廣場（2.5D + 依當地時間變化光照，見 SCENE_LAYOUTS）。
+    // 想換回原本的未來感大廳，改成 'room1.jpg' 即可（那張也有 2.5D 佈局）。
+    background: 'plaza.jpg',
     portals: [
       { to: 'annex1', x: 5, y: 90, label: '活動報名' },
       { to: 'annex2', x: 15, y: 90, label: '課程教學' }
@@ -219,6 +221,270 @@ Object.keys(initialBackgroundState.roomBackgrounds || {}).forEach((roomId) => {
 
 function getRoom(roomId) {
   return rooms[roomId] || null;
+}
+
+// ---------------------------------------------------------------
+// 2.5D 場景佈局：可走範圍、障礙物、遠近縮放、前景遮擋
+//
+// 佈局是「跟著底圖檔名」走的（不是跟著房間走）：同一張底圖不管被哪個
+// 房間使用，地板、櫃台的位置都一樣。只有房間「有固定底圖」且那張底圖
+// 在 SCENE_LAYOUTS 裡有設定時才會啟用 2.5D；隨機底圖的房間（每個玩家
+// 抽到的圖都不一樣）維持原本的平面模式。
+//
+// 座標一律是「佔底圖寬高的百分比」（0~100），跟角色座標同一套系統；
+// 前端會把場景固定成底圖的長寬比（aspect），所以百分比可以直接對上圖片。
+//
+//   aspect      底圖寬 / 高（room1.jpg 是 1536x1024 → 1.5）
+//   walkArea    可走範圍的外框多邊形 [[x,y], ...]（腳踩的位置必須在裡面）
+//   blocked     障礙物在「地板上的投影範圍」多邊形，腳不能踩進去
+//   depth       遠近縮放：腳的 y 在 farY 時，角色高度佔場景高度 farHeight%，
+//               在 nearY 時佔 nearHeight%，中間線性內插
+//   occluders   前景遮擋圖（從底圖切出來的去背 PNG，放在 SCENE_ASSET_URL 下）
+//               x/y/w/h 是圖片在場景上的位置與大小；baseline 是物件「前緣」
+//               的地面線 [[x,y], ...]，角色腳的 y 在這條線上方（比較遠）時，
+//               會被這張圖蓋住，在線的下方（比較近）時，角色會在圖的前面
+//   portalSlots 這張底圖上適合擺傳送點的位置（大廳的活動分類傳送點依序套用）
+//
+// 新增其他房間的 2.5D 佈局：在下面加一筆以底圖檔名為 key 的設定即可。
+// 量座標時可以在遊戲網址後面加 &scene_debug=1，畫面會畫出可走範圍，
+// 點一下場景就會在提示列顯示該點的百分比座標。
+// ---------------------------------------------------------------
+const SCENE_ASSET_URL = process.env.SCENE_ASSET_URL || 'https://www.swimlife.tw/alex/game/online/scene/';
+
+const SCENE_LAYOUTS = {
+  'room1.jpg': {
+    aspect: 1536 / 1024,
+    walkArea: [[0, 73], [4, 72.5], [20, 67.5], [31, 64.5], [45, 63.5], [76, 63.5], [88, 65], [100, 65], [100, 97], [0, 97]],
+    blocked: [
+      // 接待櫃台
+      [[31.2, 67], [31.2, 74.8], [51.9, 81], [58, 81], [62.8, 76.8], [63.6, 69], [61, 67]],
+      // 圓形腳凳
+      [[73.8, 84], [75.5, 82.6], [78.5, 82.2], [81.5, 82.6], [83.2, 84], [83.2, 86.8], [81, 88], [77, 88.2], [74.5, 87.4], [73.8, 86]],
+      // 右下角前排沙發
+      [[80.4, 88.5], [82, 86], [85, 84.8], [91, 84.2], [95, 84.6], [97, 82.5], [100, 77.5], [100, 100], [80.4, 100]],
+      // 右側弧形沙發 + 茶几 + 盆栽
+      [[83, 65], [100, 64], [100, 77.5], [97, 82.5], [95, 84.6], [91, 84.2], [87, 85.2], [84.5, 82], [84.5, 75], [83.5, 70]],
+      // 左側盆栽
+      [[0, 60], [4, 60], [4.5, 73.2], [0, 73.5]]
+    ],
+    depth: { farY: 63.5, farHeight: 11, nearY: 97, nearHeight: 27 },
+    occluders: [
+      { src: 'room1/desk.png', x: 31.185, y: 54.492, w: 32.487, h: 26.27, baseline: [[31, 71], [52, 74], [64, 73]] },
+      { src: 'room1/ottoman.png', x: 73.893, y: 77.246, w: 9.375, h: 10.84, baseline: [[73.5, 85.5], [83.5, 85.5]] },
+      { src: 'room1/table.png', x: 84.44, y: 73.145, w: 12.5, h: 12.988, baseline: [[84.5, 84], [97, 84]] },
+      { src: 'room1/sofa.png', x: 80.404, y: 77.441, w: 19.596, h: 22.559, baseline: [[80, 100], [100, 100]] }
+    ],
+    portalSlots: [[8, 82], [20, 74], [14, 93], [29, 88], [43, 93], [57, 91], [69, 86], [71, 70]]
+  },
+  // 大廳（地中海風廣場，黃昏原圖）：支援依玩家當地時間切換光照（lighting）
+  'plaza.jpg': {
+    aspect: 1536 / 1024,
+    walkArea: [[15.62, 48.83], [16.6, 42.97], [21.48, 42.97], [25.72, 39.06], [31.9, 39.26], [37.76, 39.06], [39.06, 33.69], [45.57, 32.23], [50.78, 32.71], [52.08, 36.13], [58.59, 36.52], [65.1, 35.35], [68.68, 39.06], [70.31, 45.9], [74.54, 51.27], [81.38, 55.66], [80.4, 59.08], [79.75, 68.36], [79.75, 73.44], [67.71, 79.3], [64.45, 80.66], [55.34, 83.01], [55.01, 91.8], [27.34, 91.8], [21.48, 92.58], [7.81, 92.77], [7.16, 83.01], [7.49, 75.2], [13.02, 74.22], [15.1, 70.31], [14.84, 58.59]],
+    blocked: [
+      // 中央橄欖樹花台
+      [[59.44, 54.69], [58.96, 56.35], [57.58, 57.84], [55.41, 59.03], [52.69, 59.8], [49.67, 60.06], [46.66, 59.8], [43.93, 59.03], [41.77, 57.84], [40.39, 56.35], [39.91, 54.69], [40.39, 53.03], [41.77, 51.53], [43.93, 50.34], [46.66, 49.58], [49.67, 49.32], [52.69, 49.58], [55.41, 50.34], [57.58, 51.53], [58.96, 53.03]],
+      // 前方盆栽、路燈
+      [[55.21, 88.38], [60.87, 85.94], [64.13, 83.98], [67.71, 83.98], [68.88, 85.94], [68.36, 96.19], [55.21, 96.19]],
+      // 左下盆栽
+      [[9.11, 87.4], [20.83, 87.4], [20.83, 93.26], [9.11, 93.26]]
+    ],
+    depth: { farY: 31, farHeight: 6, nearY: 93, nearHeight: 17.2 },
+    occluders: [
+      { src: 'plaza/tree.png', x: 39.909, y: 32.715, w: 19.661, h: 27.734, baseline: [[40, 54.7], [59.5, 54.7]] },
+      { src: 'plaza/front.png', x: 55.208, y: 76.074, w: 13.672, h: 20.508, baseline: [[55, 93], [69, 93]] },
+      { src: 'plaza/olive.png', x: 68.88, y: 68.262, w: 10.417, h: 21.094, baseline: [[68.5, 88.5], [79.5, 88.5]] },
+      { src: 'plaza/left.png', x: 9.44, y: 80.176, w: 11.328, h: 12.402, baseline: [[9, 92], [21, 92]] }
+    ],
+    // 傳送點位置：咖啡廳樓梯口、左側木門、後方拱門、右後拱門、街機店門口、
+    // 露台欄杆旁、下方階梯、左下空地
+    portalSlots: [[17.06, 47.66], [18.6, 43.6], [27.99, 39.26], [61.2, 36.91], [79.43, 55.47], [76.82, 68.36], [39.06, 90.33], [11.07, 78.12]],
+    // 時間光照：底圖本身是「黃昏」，另外準備清晨 / 白天 / 夜晚三個版本
+    // （scene/plaza/dawn.jpg、day.jpg、night.jpg），前景遮擋圖也各有一份
+    // （例如 tree_night.png）。前端依玩家電腦的本地時間在版本之間淡入淡出。
+    lighting: { variants: ['night', 'dawn', 'day'], dir: 'plaza/' }
+  }
+};
+
+// 房間目前生效的佈局（沒有就回傳 null = 平面模式）
+function getRoomLayout(room) {
+  if (!room || !room.background) return null;
+  return SCENE_LAYOUTS[room.background] || null;
+}
+
+// 送給前端的佈局資料（前端用來縮放、排前後、畫前景；可走範圍也一起送，
+// 給 scene_debug 模式畫出來用，真正的檢查一律在伺服器做）
+function getRoomScenePayload(room) {
+  const layout = getRoomLayout(room);
+  if (!layout) return null;
+  return {
+    aspect: layout.aspect,
+    walkArea: layout.walkArea,
+    blocked: layout.blocked,
+    depth: layout.depth,
+    occluders: (layout.occluders || []).map((o) => {
+      const item = Object.assign({}, o, { src: SCENE_ASSET_URL + o.src });
+      // 有時間光照的佈局：每張遮擋圖附上各時段版本的網址（tree.png → tree_night.png）
+      if (layout.lighting) {
+        item.variants = {};
+        layout.lighting.variants.forEach((v) => {
+          item.variants[v] = SCENE_ASSET_URL + o.src.replace(/\.png$/i, '_' + v + '.png');
+        });
+      }
+      return item;
+    }),
+    lighting: layout.lighting ? {
+      variants: layout.lighting.variants.reduce((acc, v) => {
+        acc[v] = SCENE_ASSET_URL + layout.lighting.dir + v + '.jpg';
+        return acc;
+      }, {})
+    } : null
+  };
+}
+
+// ---- 幾何小工具（座標都是百分比） ----
+function pointInPolygon(x, y, poly) {
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const xi = poly[i][0], yi = poly[i][1], xj = poly[j][0], yj = poly[j][1];
+    if (((yi > y) !== (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi) + xi)) inside = !inside;
+  }
+  return inside;
+}
+
+function isWalkable(layout, x, y) {
+  if (!pointInPolygon(x, y, layout.walkArea)) return false;
+  return !(layout.blocked || []).some((poly) => pointInPolygon(x, y, poly));
+}
+
+function nearestOnSegment(px, py, ax, ay, bx, by) {
+  const dx = bx - ax, dy = by - ay;
+  const len2 = dx * dx + dy * dy;
+  let t = len2 ? ((px - ax) * dx + (py - ay) * dy) / len2 : 0;
+  t = Math.max(0, Math.min(1, t));
+  return [ax + t * dx, ay + t * dy];
+}
+
+function polygonCentroid(poly) {
+  let sx = 0, sy = 0;
+  poly.forEach((p) => { sx += p[0]; sy += p[1]; });
+  return [sx / poly.length, sy / poly.length];
+}
+
+// 點到不能走的地方（牆外、櫃台裡）時，改成「離它最近、而且可以走」的點，
+// 這樣玩家點櫃台，角色會走到櫃台邊停下來，而不是完全不理他。
+function clampToWalkable(layout, x, y) {
+  x = Number(x); y = Number(y);
+  if (!isFinite(x) || !isFinite(y)) return null;
+  if (isWalkable(layout, x, y)) return [x, y];
+
+  const NUDGE = 0.6; // 從邊界往可走區內推一點點，避免剛好卡在線上
+  const candidates = [];
+  const addEdges = (poly, towardInside) => {
+    const c = polygonCentroid(poly);
+    for (let i = 0; i < poly.length; i++) {
+      const a = poly[i], b = poly[(i + 1) % poly.length];
+      const p = nearestOnSegment(x, y, a[0], a[1], b[0], b[1]);
+      // 外框：往多邊形中心推；障礙物：往遠離障礙物中心的方向推
+      let vx = towardInside ? c[0] - p[0] : p[0] - c[0];
+      let vy = towardInside ? c[1] - p[1] : p[1] - c[1];
+      const vl = Math.sqrt(vx * vx + vy * vy) || 1;
+      candidates.push([p[0] + (vx / vl) * NUDGE, p[1] + (vy / vl) * NUDGE]);
+    }
+  };
+  addEdges(layout.walkArea, true);
+  (layout.blocked || []).forEach((poly) => addEdges(poly, false));
+
+  let best = null, bestD = Infinity;
+  candidates.forEach((p) => {
+    if (!isWalkable(layout, p[0], p[1])) return;
+    const d = (p[0] - x) * (p[0] - x) + (p[1] - y) * (p[1] - y);
+    if (d < bestD) { bestD = d; best = p; }
+  });
+  return best ? [Math.round(best[0] * 100) / 100, Math.round(best[1] * 100) / 100] : null;
+}
+
+// 直線從 a 走到 b 會不會穿過障礙物或走出可走範圍（每 0.5% 取樣檢查一次，
+// 障礙物都是手量的粗略多邊形，取樣法比精確的線段相交更不容易出錯）
+function segmentWalkable(layout, a, b) {
+  const dx = b[0] - a[0], dy = b[1] - a[1];
+  const steps = Math.max(1, Math.ceil(Math.sqrt(dx * dx + dy * dy) / 0.5));
+  for (let i = 1; i < steps; i++) {
+    const t = i / steps;
+    if (!isWalkable(layout, a[0] + dx * t, a[1] + dy * t)) return false;
+  }
+  return true;
+}
+
+// 路徑節點：每個障礙物頂點往外推一點（繞過轉角用），預先算好快取起來
+function getLayoutNavNodes(layout) {
+  if (layout._navNodes) return layout._navNodes;
+  const nodes = [];
+  const OFFSET = 1.4;
+  (layout.blocked || []).forEach((poly) => {
+    const c = polygonCentroid(poly);
+    poly.forEach((p) => {
+      const vx = p[0] - c[0], vy = p[1] - c[1];
+      const vl = Math.sqrt(vx * vx + vy * vy) || 1;
+      const n = [p[0] + (vx / vl) * OFFSET, p[1] + (vy / vl) * OFFSET];
+      if (isWalkable(layout, n[0], n[1])) nodes.push(n);
+    });
+  });
+  layout._navNodes = nodes;
+  return nodes;
+}
+
+// 找一條從 from 走到 to 不會穿過障礙物的路線（可視圖 + Dijkstra），
+// 回傳中途要經過的點（不含起點，含終點）。節點只有二、三十個，算很快。
+// 找不到路的時候直接回傳 [to]（等同直線走過去，至少不會卡住不動）。
+function findScenePath(layout, from, to) {
+  if (segmentWalkable(layout, from, to)) return [to];
+  const pts = [from, to].concat(getLayoutNavNodes(layout));
+  const n = pts.length;
+  const dist = new Array(n).fill(Infinity);
+  const prev = new Array(n).fill(-1);
+  const done = new Array(n).fill(false);
+  dist[0] = 0;
+  for (let iter = 0; iter < n; iter++) {
+    let u = -1;
+    for (let i = 0; i < n; i++) if (!done[i] && (u === -1 || dist[i] < dist[u])) u = i;
+    if (u === -1 || dist[u] === Infinity) break;
+    if (u === 1) break;
+    done[u] = true;
+    for (let v = 0; v < n; v++) {
+      if (done[v] || v === u) continue;
+      if (!segmentWalkable(layout, pts[u], pts[v])) continue;
+      const d = dist[u] + Math.hypot(pts[v][0] - pts[u][0], pts[v][1] - pts[u][1]);
+      if (d < dist[v]) { dist[v] = d; prev[v] = u; }
+    }
+  }
+  if (prev[1] === -1) return [to];
+  const path = [];
+  for (let v = 1; v !== 0; v = prev[v]) {
+    path.unshift([Math.round(pts[v][0] * 100) / 100, Math.round(pts[v][1] * 100) / 100]);
+  }
+  return path;
+}
+
+// 在可走範圍裡隨機挑一個點（進場、傳送時沒有指定位置用）
+function randomWalkablePoint(layout) {
+  const xs = layout.walkArea.map((p) => p[0]), ys = layout.walkArea.map((p) => p[1]);
+  const minX = Math.min.apply(null, xs), maxX = Math.max.apply(null, xs);
+  const minY = Math.min.apply(null, ys), maxY = Math.max.apply(null, ys);
+  for (let i = 0; i < 200; i++) {
+    // 先四捨五入再檢查，避免剛好在邊界上的點四捨五入後跑到範圍外
+    const x = Math.round((minX + Math.random() * (maxX - minX)) * 100) / 100;
+    const y = Math.round((minY + Math.random() * (maxY - minY)) * 100) / 100;
+    if (isWalkable(layout, x, y)) return [x, y];
+  }
+  return [50, 90];
+}
+
+// 角色要出現在房間的某個位置：2.5D 房間會修正到可走範圍內，平面房間維持原本的夾值
+function placeInRoom(room, x, y) {
+  const layout = getRoomLayout(room);
+  if (!layout) return [clampX(x), clampY(y)];
+  if (x === undefined || y === undefined) return randomWalkablePoint(layout);
+  return clampToWalkable(layout, x, y) || randomWalkablePoint(layout);
 }
 
 
@@ -514,6 +780,15 @@ async function refreshEventPortals() {
   const eventPortals = ensureEventRoomsAndPortals(sorts);
   const mainRoom = getRoom(DEFAULT_ROOM_ID);
   if (mainRoom) {
+    // 大廳如果是 2.5D 底圖，而且佈局有設定 portalSlots，傳送點改放到
+    // 佈局指定的位置（避開櫃台、沙發），超過的部分維持原本的排列方式。
+    const layout = getRoomLayout(mainRoom);
+    if (layout && Array.isArray(layout.portalSlots)) {
+      eventPortals.forEach((p, i) => {
+        const slot = layout.portalSlots[i];
+        if (slot) { p.x = slot[0]; p.y = slot[1]; }
+      });
+    }
     mainRoom.portals = eventPortals;
   }
 }
@@ -649,7 +924,22 @@ app.post('/admin/set-room-background', async (req, res) => {
 
   // 廣播給「目前在這個房間裡」的玩家立即套用新底圖；其他房間的玩家不受影響。
   const url = await getRoomBackgroundUrl(room);
-  io.to(roomId).emit('room-background-changed', { background: url });
+  const scene = getRoomScenePayload(room);
+  io.to(roomId).emit('room-background-changed', { background: url, scene });
+
+  // 換成有 2.5D 佈局的底圖時，房間裡現有的角色可能剛好站在新底圖的櫃台
+  // 或牆上，把他們移到最近的可走位置。
+  const layout = getRoomLayout(room);
+  if (layout) {
+    Object.values(room.characters).forEach((ch) => {
+      const p = clampToWalkable(layout, ch.x, ch.y) || randomWalkablePoint(layout);
+      if (p[0] !== ch.x || p[1] !== ch.y) {
+        ch.x = p[0];
+        ch.y = p[1];
+        io.to(roomId).emit('char-moved', { id: ch.id, x: ch.x, y: ch.y, path: [p] });
+      }
+    });
+  }
 
   return res.json({ ok: true, roomId, background, url });
 });
@@ -770,6 +1060,13 @@ io.on('connection', (socket) => {
     // 重新連線後都從大廳重新出發，行為單純、不容易出錯。
     const roomId = DEFAULT_ROOM_ID;
     const room = getRoom(roomId);
+
+    // 2.5D 房間：出生點改成在可走範圍內隨機挑（不會生在櫃台裡或牆上）
+    if (getRoomLayout(room)) {
+      const spawn = placeInRoom(room);
+      c.x = spawn[0];
+      c.y = spawn[1];
+    }
     room.characters[id] = c;
     socket.data.charId = id;
     socket.data.roomId = roomId;
@@ -808,7 +1105,8 @@ io.on('connection', (socket) => {
       background,
       brightness: currentBrightness,
       eventLinks,
-      bodyCustomization
+      bodyCustomization,
+      scene: getRoomScenePayload(room)
     });
 
     // 廣播給同房間的其他人：有新角色加入
@@ -826,10 +1124,25 @@ io.on('connection', (socket) => {
     const id = socket.data.charId;
     const room = getRoom(roomId);
     if (!room || !id || !room.characters[id] || !data) return;
+    const ch = room.characters[id];
+
+    // 2.5D 房間：目的地修正到可走範圍內，並算出繞過障礙物的路線（path），
+    // 前端會沿著 path 一段一段走過去。平面房間維持原本的夾值方式。
+    const layout = getRoomLayout(room);
+    if (layout) {
+      const target = clampToWalkable(layout, data.x, data.y);
+      if (!target) return;
+      const path = findScenePath(layout, [ch.x, ch.y], target);
+      ch.x = target[0];
+      ch.y = target[1];
+      io.to(roomId).emit('char-moved', { id, x: ch.x, y: ch.y, path });
+      return;
+    }
+
     const x = clampX(data.x);
     const y = clampY(data.y);
-    room.characters[id].x = x;
-    room.characters[id].y = y;
+    ch.x = x;
+    ch.y = y;
     io.to(roomId).emit('char-moved', { id, x, y });
   });
 
@@ -949,8 +1262,15 @@ io.on('connection', (socket) => {
     // 進入新房間：如果新房間裡剛好有一個「通往原本房間」的傳送點，就從那個
     // 傳送點的位置重生（比較合理，像是從門走出來），沒有的話就隨機給個位置。
     const spawnPortal = (toRoom.portals || []).find(p => p.to === fromRoomId);
-    c.x = clampX(spawnPortal ? spawnPortal.x : 20 + Math.random() * 60);
-    c.y = clampY(spawnPortal ? spawnPortal.y : 30 + Math.random() * 50);
+    if (getRoomLayout(toRoom)) {
+      // 2.5D 房間：一樣從回程傳送點的位置出現，但修正到可走範圍內
+      const spawn = spawnPortal ? placeInRoom(toRoom, spawnPortal.x, spawnPortal.y) : placeInRoom(toRoom);
+      c.x = spawn[0];
+      c.y = spawn[1];
+    } else {
+      c.x = clampX(spawnPortal ? spawnPortal.x : 20 + Math.random() * 60);
+      c.y = clampY(spawnPortal ? spawnPortal.y : 30 + Math.random() * 50);
+    }
 
     toRoom.characters[id] = c;
     socket.join(toRoomId);
@@ -975,7 +1295,8 @@ io.on('connection', (socket) => {
       chatLog: toRoom.chatLog,
       background,
       brightness: currentBrightness,
-      eventLinks
+      eventLinks,
+      scene: getRoomScenePayload(toRoom)
     });
 
     // 廣播給新房間的其他人：有角色傳送進來了
