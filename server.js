@@ -1149,7 +1149,7 @@ app.post('/admin/set-room-background', async (req, res) => {
 //   背包 slots     [{ code, qty }]，同種道具堆疊在同一格，所以最多 50 種；以陣列順序為格子順序。
 //   地上道具       room.groundItems：id -> { id, code, qty, x, y, source, expiresAt }
 //                  source = 'spawn'（伺服器自動刷）/ 'admin'（後台放置）/ 'drop'（玩家丟下）
-//                  expiresAt = 到期時間（毫秒），null = 不會消失（只有 drop 會到期）
+//                  expiresAt = 到期時間（毫秒）：不分來源，放下後 GROUND_ITEM_TTL_MS 沒人撿就自動清除
 //
 // 伺服器是唯一真相：背包記憶體版（inventories）在伺服器執行期間是權威，每次變動後
 // 把「完整背包」排進存檔佇列寫回資料庫（inventory_api.asp）；前端只能送 pickup-item /
@@ -1172,7 +1172,7 @@ const ITEM_CODE_RE = /^[a-z0-9_]{1,20}$/;
 const INVENTORY_MAX_SLOTS = 50;               // 背包格數上限（同種道具堆疊同一格）
 const MAX_GROUND_ITEMS_PER_ROOM = 40;         // 每個房間地上最多同時有幾個道具
 const PICKUP_RANGE = 6;                       // 撿取距離（百分比座標，跟傳送點門口檢查同一套單位）
-const DROPPED_ITEM_TTL_MS = 10 * 60 * 1000;   // 玩家丟在地上的道具 10 分鐘後消失
+const GROUND_ITEM_TTL_MS = 30 * 60 * 1000;    // 地上道具（自動刷 / 後台放 / 玩家丟）30 分鐘沒人撿就清除
 const ITEM_ACTION_MIN_INTERVAL_MS = 300;      // 撿取 / 丟下 / 丟棄的節流間隔
 const GROUND_ITEM_TICK_MS = 5 * 1000;         // 自動刷道具 + 清除過期道具的檢查週期
 
@@ -1353,7 +1353,7 @@ function addGroundItem(room, fields) {
     x: fields.x,
     y: fields.y,
     source: fields.source,
-    expiresAt: fields.expiresAt || null
+    expiresAt: Date.now() + GROUND_ITEM_TTL_MS
   };
   room.groundItems.set(item.id, item);
   io.to(room.id).emit('ground-item-added', { item: publicGroundItem(item) });
@@ -1383,7 +1383,7 @@ function tickGroundItems() {
   Object.keys(rooms).forEach((roomId) => {
     const room = rooms[roomId];
     room.groundItems.forEach((it) => {
-      if (it.expiresAt && it.expiresAt <= now) removeGroundItem(room, it.id);
+      if (it.expiresAt <= now) removeGroundItem(room, it.id);
     });
   });
   Object.keys(ITEM_SPAWN_RULES).forEach((roomId) => {
@@ -1425,7 +1425,7 @@ app.options('/admin/spawn-item', (req, res) => {
   res.sendStatus(204);
 });
 
-// 在指定房間的隨機位置放 count 個道具（每個數量 qty），來源記為 admin、不會自動消失
+// 在指定房間的隨機位置放 count 個道具（每個數量 qty），來源記為 admin（一樣 30 分鐘沒人撿就清除）
 app.post('/admin/spawn-item', (req, res) => {
   setCorsForAdmin(res);
   const secret = req.headers['x-admin-secret'] || (req.body && req.body.secret);
@@ -1957,7 +1957,7 @@ io.on('connection', (socket) => {
     queueInventorySave(ctx.memberId, result.slots);
   });
 
-  // 丟到地上：整疊丟在角色腳邊，其他人可以撿，10 分鐘後消失
+  // 丟到地上：整疊丟在角色腳邊，其他人可以撿，30 分鐘沒人撿就清除
   socket.on('drop-item', (data) => {
     const ctx = getItemActionContext();
     if (!ctx) return;
@@ -1978,7 +1978,7 @@ io.on('connection', (socket) => {
     const p = placeInRoom(ctx.room, ctx.ch.x + (Math.random() - 0.5) * 4, ctx.ch.y + Math.random() * 2);
     addGroundItem(ctx.room, {
       code, qty: result.removed.qty, x: p[0], y: p[1],
-      source: 'drop', expiresAt: Date.now() + DROPPED_ITEM_TTL_MS
+      source: 'drop'
     });
     inventories.set(ctx.memberId, result.slots);
     socket.emit('inventory-changed', { slots: result.slots });
