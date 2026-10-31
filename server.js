@@ -168,6 +168,11 @@ let currentBrightness = initialBackgroundState.brightness;
 // 要新增房間或傳送點，直接在下面加一筆就好；不需要動到其他程式邏輯。
 // 記得幫新房間也設定「回程」的傳送點，不然玩家進去後就出不來了。
 // ---------------------------------------------------------------
+// 所有平面房間的「回程」傳送點統一放在同一個位置（右側偏下）。
+// 原本放在 (92, 86)，傳送門的名稱標籤剛好被右下角的「場景縮放」控制列蓋住，
+// 點不到、也看不到；往上移到 78，標籤就會在控制列上方。要調整位置改這裡就好。
+const RETURN_PORTAL_POS = { x: 92, y: 78 };
+
 const ROOMS_CONFIG = {
   main: {
     id: 'main',
@@ -199,7 +204,7 @@ const ROOMS_CONFIG = {
     background: null, // 沒指定 → 隨機挑一張 bg 開頭的 jpg（見 getRoomBackgroundUrl）
     // 活動分類傳送點會在 refreshEventPortals() 加進這個房間
     portals: [
-      { to: 'main', x: 92, y: 86, label: '回到廣場' }
+      { to: 'main', x: RETURN_PORTAL_POS.x, y: RETURN_PORTAL_POS.y, label: '回到廣場' }
     ]
   },
   annex2: {
@@ -207,7 +212,7 @@ const ROOMS_CONFIG = {
     name: '教學課程',
     background: null,
     portals: [
-      { to: 'main', x: 92, y: 86, label: '回到廣場' }
+      { to: 'main', x: RETURN_PORTAL_POS.x, y: RETURN_PORTAL_POS.y, label: '回到廣場' }
     ]
   },
   // ---- 廣場四周其他建築對應的房間（內容之後再設計，目前是隨機底圖 + 回廣場的傳送點）----
@@ -215,49 +220,49 @@ const ROOMS_CONFIG = {
     id: 'b_sport',
     name: '運動人生',
     background: null,
-    portals: [ { to: 'main', x: 92, y: 86, label: '回到廣場' } ]
+    portals: [ { to: 'main', x: RETURN_PORTAL_POS.x, y: RETURN_PORTAL_POS.y, label: '回到廣場' } ]
   },
   b_assoc: {
     id: 'b_assoc',
     name: '協辦與自辦',
     background: null,
-    portals: [ { to: 'main', x: 92, y: 86, label: '回到廣場' } ]
+    portals: [ { to: 'main', x: RETURN_PORTAL_POS.x, y: RETURN_PORTAL_POS.y, label: '回到廣場' } ]
   },
   b_hq: {
     id: 'b_hq',
     name: '泳渡人生總部',
     background: null,
-    portals: [ { to: 'main', x: 92, y: 86, label: '回到廣場' } ]
+    portals: [ { to: 'main', x: RETURN_PORTAL_POS.x, y: RETURN_PORTAL_POS.y, label: '回到廣場' } ]
   },
   b_pool: {
     id: 'b_pool',
     name: '團練泳池',
     background: null,
-    portals: [ { to: 'main', x: 92, y: 86, label: '回到廣場' } ]
+    portals: [ { to: 'main', x: RETURN_PORTAL_POS.x, y: RETURN_PORTAL_POS.y, label: '回到廣場' } ]
   },
   b_shop: {
     id: 'b_shop',
     name: '購物商城',
     background: null,
-    portals: [ { to: 'main', x: 92, y: 86, label: '回到廣場' } ]
+    portals: [ { to: 'main', x: RETURN_PORTAL_POS.x, y: RETURN_PORTAL_POS.y, label: '回到廣場' } ]
   },
   b_member: {
     id: 'b_member',
     name: '會員專區',
     background: null,
-    portals: [ { to: 'main', x: 92, y: 86, label: '回到廣場' } ]
+    portals: [ { to: 'main', x: RETURN_PORTAL_POS.x, y: RETURN_PORTAL_POS.y, label: '回到廣場' } ]
   },
   b_match: {
     id: 'b_match',
     name: '專業媒合',
     background: null,
-    portals: [ { to: 'main', x: 92, y: 86, label: '回到廣場' } ]
+    portals: [ { to: 'main', x: RETURN_PORTAL_POS.x, y: RETURN_PORTAL_POS.y, label: '回到廣場' } ]
   },
   b_news: {
     id: 'b_news',
     name: '新聞資訊',
     background: null,
-    portals: [ { to: 'main', x: 92, y: 86, label: '回到廣場' } ]
+    portals: [ { to: 'main', x: RETURN_PORTAL_POS.x, y: RETURN_PORTAL_POS.y, label: '回到廣場' } ]
   },
   // 線上競賽：從廣場中間下方的金色傳送門進來。地面先從 bg1～bg4 隨機挑一張（backgroundPool），
   // 每次玩家進來都重新抽；之後有專屬底圖時，改成 background: '檔名' 或從後台指定即可
@@ -267,7 +272,7 @@ const ROOMS_CONFIG = {
     background: null,
     backgroundPool: ['bg1.jpg', 'bg2.jpg', 'bg3.jpg', 'bg4.jpg'],
     portals: [
-      { to: 'main', x: 92, y: 86, label: '回到廣場' },
+      { to: 'main', x: RETURN_PORTAL_POS.x, y: RETURN_PORTAL_POS.y, label: '回到廣場' },
       // 場景正中間：戶外泳池入口（藍色 hue）。進入前會跑 ROOM_ENTRY_CHECKS.swim_race 的會員檢查
       { to: 'swim_race', label: '🏊 線上多人競泳', x: 50, y: 55, spawn: [50, 70], hue: 170 }
     ]
@@ -279,7 +284,7 @@ const ROOMS_CONFIG = {
     name: '線上多人競泳',
     background: null,
     backgroundPool: ['bg1.jpg', 'bg2.jpg', 'bg3.jpg', 'bg4.jpg'],
-    portals: [ { to: 'contest', x: 92, y: 86, label: '回到線上競賽' } ]
+    portals: [ { to: 'contest', x: RETURN_PORTAL_POS.x, y: RETURN_PORTAL_POS.y, label: '回到線上競賽' } ]
   }
 };
 
@@ -993,9 +998,8 @@ function ensureEventRoomsAndPortals(sorts) {
         name: sort.name,
         background: persistedBg, // 沒有另外指定底圖時，套用隨機底圖邏輯
         portals: [
-          // 位置跟大廳最左下角那個傳送點（第一個分類，index 0）一致，
-          // 這樣「回大廳」的傳送點視覺上跟玩家記憶中的位置對得起來。
-          { to: 'annex1', x: computeEventPortalPosition(0).x, y: computeEventPortalPosition(0).y, label: '活動報名' }
+          // 回程傳送點跟其他房間放在同一個位置（RETURN_PORTAL_POS），所有場景操作一致
+          { to: 'annex1', x: RETURN_PORTAL_POS.x, y: RETURN_PORTAL_POS.y, label: '回到活動報名' }
         ],
         isEventRoom: true,
         sortNo: sort.no
@@ -1028,7 +1032,7 @@ async function refreshEventPortals() {
   // 新版大廳的四周建築就是入口，活動分類的傳送點改放在「活動報名」房間裡
   const signupRoom = getRoom('annex1');
   if (signupRoom) {
-    signupRoom.portals = [{ to: DEFAULT_ROOM_ID, x: 92, y: 86, label: '回到廣場' }].concat(eventPortals);
+    signupRoom.portals = [{ to: DEFAULT_ROOM_ID, x: RETURN_PORTAL_POS.x, y: RETURN_PORTAL_POS.y, label: '回到廣場' }].concat(eventPortals);
   }
 }
 
