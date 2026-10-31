@@ -168,29 +168,90 @@ const ROOMS_CONFIG = {
   main: {
     id: 'main',
     name: '集會廣場',
-    // 大廳底圖：地中海風廣場（2.5D + 依當地時間變化光照，見 SCENE_LAYOUTS）。
-    // 想換回原本的未來感大廳，改成 'room1.jpg' 即可（那張也有 2.5D 佈局）。
-    background: 'plaza.jpg',
+    // 大廳底圖：room1 系列（room1-001.jpg ~ room1-007.jpg，同一個廣場的 7 種主題）。
+    // 2.5D 佈局共用 SCENE_LAYOUTS.room1；每位玩家登入時由前端隨機挑一個主題，
+    // 也可以從場景右上角切換（只影響自己看到的畫面，大家仍在同一個廣場）。
+    background: 'room1-001.jpg',
+    // 四周建築就是傳送點：zone = 建築在圖上的範圍（點建築會走過去），
+    // x/y = 建築門口（在廣場邊緣，走到這裡就進入），spawn = 從該建築回到廣場時出現的位置
     portals: [
-      { to: 'annex1', x: 5, y: 90, label: '活動報名' },
-      { to: 'annex2', x: 15, y: 90, label: '課程教學' }
+      { to: 'b_sport', label: '運動人生', x: 23.2, y: 35, spawn: [27.6, 38.2], zone: [[1, 18], [18, 18], [18, 32], [1, 32]] },
+      { to: 'b_assoc', label: '協辦與自辦', x: 31, y: 30, spawn: [35.24, 35.57], zone: [[20, 7], [36, 7], [36, 27], [20, 27]] },
+      { to: 'b_hq', label: '泳渡人生總部', x: 50, y: 30, spawn: [50.0, 37.0], zone: [[39, 0], [61, 0], [61, 25], [39, 25]] },
+      { to: 'annex1', label: '活動報名', x: 66, y: 30, spawn: [62.23, 35.9], zone: [[63, 5], [78, 5], [78, 27], [63, 27]] },
+      { to: 'b_pool', label: '團練泳池', x: 75.5, y: 33, spawn: [70.2, 37.57], zone: [[79, 13], [99, 13], [99, 35], [79, 35]] },
+      { to: 'b_shop', label: '購物商城', x: 20.5, y: 45, spawn: [27.13, 47.25], zone: [[1, 37], [19, 37], [19, 55], [1, 55]] },
+      { to: 'b_member', label: '會員專區', x: 79.5, y: 46, spawn: [72.8, 48.04], zone: [[81, 37], [99, 37], [99, 56], [81, 56]] },
+      { to: 'b_match', label: '專業媒合', x: 16.5, y: 62, spawn: [23.35, 60.57], zone: [[1, 62], [17, 62], [17, 82], [1, 82]] },
+      { to: 'b_news', label: '新聞資訊', x: 32, y: 72, spawn: [37.09, 67.19], zone: [[22, 71], [41, 71], [41, 92], [22, 92]] },
+      { to: 'annex2', label: '教學課程', x: 78.4, y: 64.9, spawn: [72.38, 62.72], zone: [[77, 64], [99, 64], [99, 86], [77, 86]] }
     ]
   },
   annex1: {
     id: 'annex1',
     name: '活動報名',
     background: null, // 沒指定 → 隨機挑一張 bg 開頭的 jpg（見 getRoomBackgroundUrl）
+    // 活動分類傳送點會在 refreshEventPortals() 加進這個房間
     portals: [
-      { to: 'main', x: 10, y: 78, label: '集會廣場' }
+      { to: 'main', x: 92, y: 86, label: '回到廣場' }
     ]
   },
   annex2: {
     id: 'annex2',
-    name: '課程教學',
-    background: null, // 沒指定 → 隨機挑一張 bg 開頭的 jpg（見 getRoomBackgroundUrl）
+    name: '教學課程',
+    background: null,
     portals: [
-      { to: 'main', x: 10, y: 78, label: '集會廣場' }
+      { to: 'main', x: 92, y: 86, label: '回到廣場' }
     ]
+  },
+  // ---- 廣場四周其他建築對應的房間（內容之後再設計，目前是隨機底圖 + 回廣場的傳送點）----
+  b_sport: {
+    id: 'b_sport',
+    name: '運動人生',
+    background: null,
+    portals: [ { to: 'main', x: 92, y: 86, label: '回到廣場' } ]
+  },
+  b_assoc: {
+    id: 'b_assoc',
+    name: '協辦與自辦',
+    background: null,
+    portals: [ { to: 'main', x: 92, y: 86, label: '回到廣場' } ]
+  },
+  b_hq: {
+    id: 'b_hq',
+    name: '泳渡人生總部',
+    background: null,
+    portals: [ { to: 'main', x: 92, y: 86, label: '回到廣場' } ]
+  },
+  b_pool: {
+    id: 'b_pool',
+    name: '團練泳池',
+    background: null,
+    portals: [ { to: 'main', x: 92, y: 86, label: '回到廣場' } ]
+  },
+  b_shop: {
+    id: 'b_shop',
+    name: '購物商城',
+    background: null,
+    portals: [ { to: 'main', x: 92, y: 86, label: '回到廣場' } ]
+  },
+  b_member: {
+    id: 'b_member',
+    name: '會員專區',
+    background: null,
+    portals: [ { to: 'main', x: 92, y: 86, label: '回到廣場' } ]
+  },
+  b_match: {
+    id: 'b_match',
+    name: '專業媒合',
+    background: null,
+    portals: [ { to: 'main', x: 92, y: 86, label: '回到廣場' } ]
+  },
+  b_news: {
+    id: 'b_news',
+    name: '新聞資訊',
+    background: null,
+    portals: [ { to: 'main', x: 92, y: 86, label: '回到廣場' } ]
   }
 };
 const DEFAULT_ROOM_ID = 'main';
@@ -252,6 +313,24 @@ function getRoom(roomId) {
 const SCENE_ASSET_URL = process.env.SCENE_ASSET_URL || 'https://www.swimlife.tw/alex/game/online/scene/';
 
 const SCENE_LAYOUTS = {
+  // 大廳 room1 系列：7 張同一個廣場、不同主題的底圖共用這個佈局（見 getRoomLayout）
+  'room1': {
+    aspect: 1659 / 948,
+    walkArea: [[30, 29], [70, 29], [76, 33], [80, 40], [80, 52], [84, 57], [79, 65], [68, 71], [60, 77], [60, 92], [45, 92], [45, 77], [40, 73], [23, 71], [18, 65], [14, 58], [17, 52], [20, 47], [20, 38], [24, 33]],
+    blocked: [],
+    depth: { farY: 29, farHeight: 8, nearY: 92, nearHeight: 13 },
+    occluders: [],
+    // 可以切換的主題（每位玩家自己選，只影響自己的畫面）
+    skins: [
+      { file: 'room1-001.jpg', name: '未來城市', thumb: 'room1/thumb-001.jpg' },
+      { file: 'room1-002.jpg', name: '海濱主題', thumb: 'room1/thumb-002.jpg' },
+      { file: 'room1-003.jpg', name: '霓虹遊戲', thumb: 'room1/thumb-003.jpg' },
+      { file: 'room1-004.jpg', name: '奇幻城鎮', thumb: 'room1/thumb-004.jpg' },
+      { file: 'room1-005.jpg', name: '櫻花城鎮', thumb: 'room1/thumb-005.jpg' },
+      { file: 'room1-006.jpg', name: '夢幻水都', thumb: 'room1/thumb-006.jpg' },
+      { file: 'room1-007.jpg', name: '古風', thumb: 'room1/thumb-007.jpg' }
+    ]
+  },
   'room1.jpg': {
     aspect: 1536 / 1024,
     walkArea: [[0, 73], [4, 72.5], [20, 67.5], [31, 64.5], [45, 63.5], [76, 63.5], [88, 65], [100, 65], [100, 97], [0, 97]],
@@ -302,13 +381,41 @@ const SCENE_LAYOUTS = {
     // 時間光照：底圖本身是「黃昏」，另外準備清晨 / 白天 / 夜晚三個版本
     // （scene/plaza/dawn.jpg、day.jpg、night.jpg），前景遮擋圖也各有一份
     // （例如 tree_night.png）。前端依玩家電腦的本地時間在版本之間淡入淡出。
-    lighting: { variants: ['night', 'dawn', 'day'], dir: 'plaza/' }
+    lighting: { base: 'golden', variants: ['night', 'dawn', 'day'], dir: 'plaza/' }
+  },
+  // 大廳（海港城市，白天原圖）：依玩家當地時間切換清晨 / 黃昏 / 夜晚
+  'city.jpg': {
+    aspect: 2048 / 1170,
+    walkArea: [[0.0, 34.17], [6.51, 34.17], [16.93, 34.17], [26.04, 37.59], [28.65, 42.37], [39.06, 42.37], [45.57, 39.86], [60.55, 40.09], [64.13, 45.79], [71.61, 46.47], [75.85, 48.41], [78.12, 51.25], [78.45, 54.67], [74.87, 61.5], [69.01, 65.83], [65.1, 68.34], [61.85, 70.39], [57.29, 72.89], [52.93, 75.17], [49.48, 78.59], [45.57, 78.59], [40.36, 84.05], [35.16, 87.13], [32.55, 89.52], [27.34, 94.53], [21.48, 98.63], [0.0, 98.63]],
+    blocked: [
+      // 前排商場大樓
+      [[21.48, 56.95], [24.09, 51.82], [36.46, 50.68], [45.57, 54.67], [45.57, 68.34], [41.67, 74.6], [26.04, 74.03], [20.96, 69.48]],
+      // 玻璃溫室
+      [[8.33, 53.53], [9.77, 51.48], [16.6, 51.48], [17.58, 53.53], [17.45, 59.0], [8.46, 59.0]],
+      // 地球噴泉
+      [[58.4, 47.38], [58.17, 48.26], [57.5, 49.05], [56.47, 49.68], [55.16, 50.09], [53.71, 50.23], [52.26, 50.09], [50.96, 49.68], [49.92, 49.05], [49.25, 48.26], [49.02, 47.38], [49.25, 46.5], [49.92, 45.71], [50.96, 45.08], [52.26, 44.67], [53.71, 44.53], [55.16, 44.67], [56.47, 45.08], [57.5, 45.71], [58.17, 46.5]],
+      // 公園噴水池
+      [[19.4, 45.33], [19.25, 45.86], [18.8, 46.33], [18.11, 46.71], [17.24, 46.96], [16.28, 47.04], [15.31, 46.96], [14.44, 46.71], [13.75, 46.33], [13.3, 45.86], [13.15, 45.33], [13.3, 44.8], [13.75, 44.33], [14.44, 43.95], [15.31, 43.71], [16.28, 43.62], [17.24, 43.71], [18.11, 43.95], [18.8, 44.33], [19.25, 44.8]],
+      // 公園雕塑
+      [[17.19, 42.37], [17.14, 42.58], [17.01, 42.77], [16.81, 42.92], [16.56, 43.02], [16.28, 43.05], [15.99, 43.02], [15.74, 42.92], [15.54, 42.77], [15.41, 42.58], [15.36, 42.37], [15.41, 42.16], [15.54, 41.97], [15.74, 41.82], [15.99, 41.72], [16.28, 41.69], [16.56, 41.72], [16.81, 41.82], [17.01, 41.97], [17.14, 42.16]]
+    ],
+    depth: { farY: 34, farHeight: 7.5, nearY: 99, nearHeight: 11.5 },
+    occluders: [
+      { src: 'city/globe.png', x: 49.268, y: 38.034, w: 9.717, h: 13.162, baseline: [[49.15, 48.06], [58.92, 48.06]] },
+      { src: 'city/sculpture.png', x: 15.039, y: 32.735, w: 2.637, h: 10.684, baseline: [[14.65, 42.6], [17.9, 42.6]] }
+    ],
+    // 傳送點位置：廣場左側、廣場右側、地球噴泉前、海濱路口、公園、籃球場旁、海濱步道、碼頭
+    portalSlots: [[36.46, 45.56], [70.31, 50.68], [46.22, 59.79], [62.5, 59.23], [21.48, 47.84], [7.81, 68.34], [30.6, 83.14], [57.29, 70.05]],
+    // 時間光照：原圖是白天（base: 'day'），另外有 night / dawn / golden 三個版本
+    lighting: { base: 'day', variants: ['night', 'dawn', 'golden'], dir: 'city/' }
   }
 };
 
 // 房間目前生效的佈局（沒有就回傳 null = 平面模式）
 function getRoomLayout(room) {
   if (!room || !room.background) return null;
+  // room1-001.jpg ~ room1-999.jpg 都使用同一個 room1 佈局
+  if (/^room1-\d{3}\.jpg$/i.test(room.background)) return SCENE_LAYOUTS['room1'];
   return SCENE_LAYOUTS[room.background] || null;
 }
 
@@ -333,7 +440,12 @@ function getRoomScenePayload(room) {
       }
       return item;
     }),
+    skins: layout.skins ? layout.skins.map((sk) => ({
+      file: sk.file, name: sk.name, url: BG_FOLDER_URL + sk.file, thumb: SCENE_ASSET_URL + sk.thumb
+    })) : null,
     lighting: layout.lighting ? {
+      base: layout.lighting.base || 'golden',
+      order: layout.lighting.variants.slice(),
       variants: layout.lighting.variants.reduce((acc, v) => {
         acc[v] = SCENE_ASSET_URL + layout.lighting.dir + v + '.jpg';
         return acc;
@@ -829,7 +941,7 @@ function ensureEventRoomsAndPortals(sorts) {
         portals: [
           // 位置跟大廳最左下角那個傳送點（第一個分類，index 0）一致，
           // 這樣「回大廳」的傳送點視覺上跟玩家記憶中的位置對得起來。
-          { to: DEFAULT_ROOM_ID, x: computeEventPortalPosition(0).x, y: computeEventPortalPosition(0).y, label: '集會廣場' }
+          { to: 'annex1', x: computeEventPortalPosition(0).x, y: computeEventPortalPosition(0).y, label: '活動報名' }
         ],
         characters: Object.create(null),
         chatLog: [],
@@ -861,18 +973,10 @@ async function refreshEventPortals() {
   const sorts = await fetchEventSorts();
   if (!sorts || sorts.length === 0) return;
   const eventPortals = ensureEventRoomsAndPortals(sorts);
-  const mainRoom = getRoom(DEFAULT_ROOM_ID);
-  if (mainRoom) {
-    // 大廳如果是 2.5D 底圖，而且佈局有設定 portalSlots，傳送點改放到
-    // 佈局指定的位置（避開櫃台、沙發），超過的部分維持原本的排列方式。
-    const layout = getRoomLayout(mainRoom);
-    if (layout && Array.isArray(layout.portalSlots)) {
-      eventPortals.forEach((p, i) => {
-        const slot = layout.portalSlots[i];
-        if (slot) { p.x = slot[0]; p.y = slot[1]; }
-      });
-    }
-    mainRoom.portals = eventPortals;
+  // 新版大廳的四周建築就是入口，活動分類的傳送點改放在「活動報名」房間裡
+  const signupRoom = getRoom('annex1');
+  if (signupRoom) {
+    signupRoom.portals = [{ to: DEFAULT_ROOM_ID, x: 92, y: 86, label: '回到廣場' }].concat(eventPortals);
   }
 }
 
@@ -1379,6 +1483,14 @@ io.on('connection', (socket) => {
       socket.emit('teleport-error', { error: '這個房間沒有通往那裡的傳送點' });
       return;
     }
+    // 建築入口：角色要真的走到門口附近才放行
+    if (portal.zone) {
+      const me = fromRoom.characters[id];
+      if (Math.hypot(me.x - portal.x, me.y - portal.y) > 8) {
+        socket.emit('teleport-error', { error: '請先走到建築門口' });
+        return;
+      }
+    }
 
     // 離開原本的房間：從角色清單移除、離開 socket.io room、廣播給原房間的人
     const c = fromRoom.characters[id];
@@ -1394,8 +1506,10 @@ io.on('connection', (socket) => {
     // 傳送點的位置重生（比較合理，像是從門走出來），沒有的話就隨機給個位置。
     const spawnPortal = (toRoom.portals || []).find(p => p.to === fromRoomId);
     if (getRoomLayout(toRoom)) {
-      // 2.5D 房間：一樣從回程傳送點的位置出現，但修正到可走範圍內
-      const spawn = spawnPortal ? placeInRoom(toRoom, spawnPortal.x, spawnPortal.y) : placeInRoom(toRoom);
+      // 2.5D 房間：從回程傳送點的位置出現（建築入口用 spawn，站在門口內側，不會馬上又被傳送），
+      // 並修正到可走範圍內
+      const sp = spawnPortal && (spawnPortal.spawn ? { x: spawnPortal.spawn[0], y: spawnPortal.spawn[1] } : spawnPortal);
+      const spawn = sp ? placeInRoom(toRoom, sp.x, sp.y) : placeInRoom(toRoom);
       c.x = spawn[0];
       c.y = spawn[1];
     } else {
