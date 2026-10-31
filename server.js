@@ -267,7 +267,35 @@ const ROOMS_CONFIG = {
     name: '線上競賽',
     background: null,
     backgroundPool: ['bg1.jpg', 'bg2.jpg', 'bg3.jpg', 'bg4.jpg'],
-    portals: [ { to: 'main', x: 92, y: 86, label: '回到廣場' } ]
+    portals: [
+      { to: 'main', x: 92, y: 86, label: '回到廣場' },
+      // 場景正中間：戶外泳池入口（碰觸型，藍色 hue）。進入前會跑 ROOM_ENTRY_CHECKS.swim_race 的會員檢查
+      { to: 'swim_race', label: '🏊 線上多人競泳', x: 50, y: 55, spawn: [50, 70], touch: true, hue: 170 }
+    ]
+  },
+  // 線上多人競泳（戶外泳池）：多人小遊戲之後在這裡開發，目前是準備區。
+  // 底圖暫用 bg1～bg4 隨機，之後有泳池底圖時改成 background: '檔名' 或從後台指定
+  swim_race: {
+    id: 'swim_race',
+    name: '線上多人競泳',
+    background: null,
+    backgroundPool: ['bg1.jpg', 'bg2.jpg', 'bg3.jpg', 'bg4.jpg'],
+    portals: [ { to: 'contest', x: 92, y: 86, label: '回到線上競賽' } ]
+  }
+};
+
+// ---------------------------------------------------------------
+// 房間進入檢查：傳送到這些房間前，伺服器先跑對應的檢查函式，
+// 回傳 { ok:true } 才放行，{ ok:false, error } 會回 teleport-error 給玩家。
+// 「線上多人競泳」是之後多人小遊戲的入口，會員資格、報名、人數上限、
+// 比賽是否開放等規則都加在這裡（可以是 async，例如呼叫 ASP API 查資料庫）。
+// socket.data 裡有 memberId（資料庫會員編號）、charId、roomId 可用。
+// ---------------------------------------------------------------
+const ROOM_ENTRY_CHECKS = {
+  swim_race: async (socket) => {
+    // 目前規則：必須是已驗證登入的會員（進場時 verify_token.asp 驗證過才會有 memberId）
+    if (!socket.data.memberId) return { ok: false, error: '請先登入會員才能進入線上多人競泳' };
+    return { ok: true };
   }
 };
 const DEFAULT_ROOM_ID = 'main';
@@ -2008,6 +2036,24 @@ io.on('connection', (socket) => {
       }
     }
 
+    // 房間進入檢查（見 ROOM_ENTRY_CHECKS）。檢查可能是非同步的，回來後要再確認
+    // 這段時間玩家沒有離線或被傳到別的房間，才繼續傳送
+    const entryCheck = ROOM_ENTRY_CHECKS[toRoomId];
+    if (entryCheck) {
+      let result;
+      try {
+        result = await entryCheck(socket, toRoom);
+      } catch (e) {
+        console.error('❌ 房間進入檢查失敗：', toRoomId, e.message);
+        result = { ok: false, error: '暫時無法進入，請稍後再試' };
+      }
+      if (!result || !result.ok) {
+        socket.emit('teleport-error', { error: (result && result.error) || '目前無法進入' });
+        return;
+      }
+      if (socket.data.roomId !== fromRoomId || !fromRoom.characters[id]) return;
+    }
+
     // 離開原本的房間：從角色清單移除、離開 socket.io room、廣播給原房間的人
     const c = fromRoom.characters[id];
     delete fromRoom.characters[id];
@@ -2029,8 +2075,9 @@ io.on('connection', (socket) => {
       c.x = spawn[0];
       c.y = spawn[1];
     } else {
-      c.x = clampX(spawnPortal ? spawnPortal.x : 20 + Math.random() * 60);
-      c.y = clampY(spawnPortal ? spawnPortal.y : 30 + Math.random() * 50);
+      const sp = spawnPortal && (spawnPortal.spawn ? { x: spawnPortal.spawn[0], y: spawnPortal.spawn[1] } : spawnPortal);
+      c.x = clampX(sp ? sp.x : 20 + Math.random() * 60);
+      c.y = clampY(sp ? sp.y : 30 + Math.random() * 50);
     }
 
     toRoom.characters[id] = c;
