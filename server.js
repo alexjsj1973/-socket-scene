@@ -182,18 +182,23 @@ const ROOMS_CONFIG = {
     // 也可以從場景右上角切換（只影響自己看到的畫面，大家仍在同一個廣場）。
     background: 'room1-001.jpg',
     // 四周建築就是傳送點：zone = 建築在圖上的範圍（點建築會走過去），
-    // x/y = 建築門口（在廣場邊緣，走到這裡就進入），spawn = 從該建築回到廣場時出現的位置
+    // sign = 建築中文名稱招牌在底圖上的大約位置（7 種主題位置差不多，取平均）
+    // x/y = 「招牌前」的入口：可走範圍內離招牌最近的地方，角色走到這裡附近才進入
+    //       （前端 DOOR_RADIUS 判定，伺服器 teleport 再檢查距離 8 以內）
+    // spawn = 從該建築回到廣場時出現的位置，離入口約 6 以上，回來時不會被立刻再傳進去
+    // 調整位置時：遊戲網址加 &scene_debug=1，點畫面看百分比座標
     portals: [
-      { to: 'b_sport', label: '運動人生', x: 23.2, y: 35, spawn: [27.6, 38.2], zone: [[1, 18], [18, 18], [18, 32], [1, 32]] },
-      { to: 'b_assoc', label: '協辦與自辦', x: 31, y: 30, spawn: [35.24, 35.57], zone: [[20, 7], [36, 7], [36, 27], [20, 27]] },
-      { to: 'b_hq', label: '泳渡人生總部', x: 50, y: 30, spawn: [50.0, 37.0], zone: [[39, 0], [61, 0], [61, 25], [39, 25]] },
-      { to: 'annex1', label: '活動報名', x: 66, y: 30, spawn: [62.23, 35.9], zone: [[63, 5], [78, 5], [78, 27], [63, 27]] },
-      { to: 'b_pool', label: '團練泳池', x: 75.5, y: 33, spawn: [70.2, 37.57], zone: [[79, 13], [99, 13], [99, 35], [79, 35]] },
-      { to: 'b_shop', label: '購物商城', x: 20.5, y: 45, spawn: [27.13, 47.25], zone: [[1, 37], [19, 37], [19, 55], [1, 55]] },
-      { to: 'b_member', label: '會員專區', x: 79.5, y: 46, spawn: [72.8, 48.04], zone: [[81, 37], [99, 37], [99, 56], [81, 56]] },
-      { to: 'b_match', label: '專業媒合', x: 16.5, y: 62, spawn: [23.35, 60.57], zone: [[1, 62], [17, 62], [17, 82], [1, 82]] },
-      { to: 'b_news', label: '新聞資訊', x: 32, y: 72, spawn: [37.09, 67.19], zone: [[22, 71], [41, 71], [41, 92], [22, 92]] },
-      { to: 'annex2', label: '教學課程', x: 78.4, y: 64.9, spawn: [72.38, 62.72], zone: [[77, 64], [99, 64], [99, 86], [77, 86]] },
+      { to: 'b_sport', label: '運動人生', sign: [13.3, 25.8], x: 24.5, y: 34.8, spawn: [29.6, 38.8], zone: [[1, 18], [18, 18], [18, 32], [1, 32]] },
+      { to: 'b_assoc', label: '協辦與自辦', sign: [29.5, 14.5], x: 31, y: 30.2, spawn: [34.9, 35.3], zone: [[20, 7], [36, 7], [36, 27], [20, 27]] },
+      { to: 'b_hq', label: '泳渡人生總部', sign: [50, 11.5], x: 50, y: 30.5, spawn: [50.0, 37.0], zone: [[39, 0], [61, 0], [61, 25], [39, 25]] },
+      { to: 'annex1', label: '活動報名', sign: [69.5, 15.5], x: 68.6, y: 30.2, spawn: [64.7, 35.4], zone: [[63, 5], [78, 5], [78, 27], [63, 27]] },
+      { to: 'b_pool', label: '團練泳池', sign: [87.5, 25], x: 74.9, y: 34, spawn: [69.9, 38.2], zone: [[79, 13], [99, 13], [99, 35], [79, 35]] },
+      { to: 'b_shop', label: '購物商城', sign: [11.5, 46], x: 20.8, y: 47, spawn: [27, 48.5], zone: [[1, 37], [19, 37], [19, 55], [1, 55]] },
+      { to: 'b_member', label: '會員專區', sign: [89, 47.8], x: 78.8, y: 48, spawn: [72.5, 49.5], zone: [[81, 37], [99, 37], [99, 56], [81, 56]] },
+      { to: 'b_match', label: '專業媒合', sign: [11.5, 73], x: 20.5, y: 66.3, spawn: [26.8, 63.7], zone: [[1, 62], [17, 62], [17, 82], [1, 82]] },
+      // 新聞資訊的招牌在建築右側，入口放在招牌右邊的南側步道邊（原本在建築上方的廣場邊緣，離招牌太遠）
+      { to: 'b_news', label: '新聞資訊', sign: [36.5, 81], x: 46, y: 81, spawn: [50, 76], zone: [[22, 71], [41, 71], [41, 92], [22, 92]] },
+      { to: 'annex2', label: '教學課程', sign: [85, 74], x: 78, y: 64.5, spawn: [71.4, 62.4], zone: [[77, 64], [99, 64], [99, 86], [77, 86]] },
       // 廣場正中間下方空地的金色傳送門；spawn 放在傳送門上方一段距離，從線上競賽回來時站在門外
       { to: 'contest', label: '線上競賽', x: 52.5, y: 85, spawn: [52.5, 74] }
     ]
@@ -1485,13 +1490,24 @@ function removeGroundItem(room, itemId) {
 
 // 房間裡隨機一個放道具的位置：2.5D 房間在可走範圍內挑；平面房間避開上下邊緣
 // （下方 y 80 以後常有傳送點）
+// 道具不放在傳送點 / 建築入口附近：玩家走過去撿的時候會停在入口上，
+// 容易被誤會成「撿星星卻被傳送走」。前端撿道具的那段路也不會觸發傳送（見 index.asp checkDoorArrival）。
+const ITEM_PORTAL_CLEARANCE = 10;   // 跟傳送點 / 入口至少保持的距離（百分比座標）
 function randomGroundPoint(room) {
   const layout = getRoomLayout(room);
-  if (layout) return randomWalkablePoint(layout);
-  return [
-    Math.round(clampX(10 + Math.random() * 80) * 100) / 100,
-    Math.round(clampY(28 + Math.random() * 50) * 100) / 100
-  ];
+  const pick = () => layout
+    ? randomWalkablePoint(layout)
+    : [
+        Math.round(clampX(10 + Math.random() * 80) * 100) / 100,
+        Math.round(clampY(28 + Math.random() * 50) * 100) / 100
+      ];
+  const portals = room.portals || [];
+  let p = pick();
+  for (let i = 0; i < 30; i++) {
+    if (!portals.some((pt) => Math.hypot(pt.x - p[0], pt.y - p[1]) < ITEM_PORTAL_CLEARANCE)) return p;
+    p = pick();
+  }
+  return p;   // 房間太擠、找不到空位時就用最後一次抽到的位置
 }
 
 // ---- 自動刷道具的道具池（後台設定，存在 data/item-spawn-state.json，重啟後保留）----
