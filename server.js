@@ -189,9 +189,8 @@ const ROOMS_CONFIG = {
       { to: 'b_match', label: '專業媒合', x: 16.5, y: 62, spawn: [23.35, 60.57], zone: [[1, 62], [17, 62], [17, 82], [1, 82]] },
       { to: 'b_news', label: '新聞資訊', x: 32, y: 72, spawn: [37.09, 67.19], zone: [[22, 71], [41, 71], [41, 92], [22, 92]] },
       { to: 'annex2', label: '教學課程', x: 78.4, y: 64.9, spawn: [72.38, 62.72], zone: [[77, 64], [99, 64], [99, 86], [77, 86]] },
-      // 廣場正中間下方空地的金色傳送門：touch = 角色走到（碰到）傳送門就自動傳送，不用點；
-      // spawn 放在傳送門上方一段距離，從線上競賽回來時不會一出現就又被傳走
-      { to: 'contest', label: '線上競賽', x: 52.5, y: 85, spawn: [52.5, 74], touch: true }
+      // 廣場正中間下方空地的金色傳送門；spawn 放在傳送門上方一段距離，從線上競賽回來時站在門外
+      { to: 'contest', label: '線上競賽', x: 52.5, y: 85, spawn: [52.5, 74] }
     ]
   },
   annex1: {
@@ -269,8 +268,8 @@ const ROOMS_CONFIG = {
     backgroundPool: ['bg1.jpg', 'bg2.jpg', 'bg3.jpg', 'bg4.jpg'],
     portals: [
       { to: 'main', x: 92, y: 86, label: '回到廣場' },
-      // 場景正中間：戶外泳池入口（碰觸型，藍色 hue）。進入前會跑 ROOM_ENTRY_CHECKS.swim_race 的會員檢查
-      { to: 'swim_race', label: '🏊 線上多人競泳', x: 50, y: 55, spawn: [50, 70], touch: true, hue: 170 }
+      // 場景正中間：戶外泳池入口（藍色 hue）。進入前會跑 ROOM_ENTRY_CHECKS.swim_race 的會員檢查
+      { to: 'swim_race', label: '🏊 線上多人競泳', x: 50, y: 55, spawn: [50, 70], hue: 170 }
     ]
   },
   // 線上多人競泳（戶外泳池）：多人小遊戲之後在這裡開發，目前是準備區。
@@ -2027,11 +2026,12 @@ io.on('connection', (socket) => {
       socket.emit('teleport-error', { error: '這個房間沒有通往那裡的傳送點' });
       return;
     }
-    // 建築入口 / 碰觸型傳送門：角色要真的走到門口（傳送門）附近才放行
-    if (portal.zone || portal.touch) {
+    // 所有傳送點（建築入口、傳送門）：角色要真的走到門口 / 傳送點附近才放行，
+    // 不能從遠處直接送 teleport 切換場景
+    {
       const me = fromRoom.characters[id];
       if (Math.hypot(me.x - portal.x, me.y - portal.y) > 8) {
-        socket.emit('teleport-error', { error: portal.zone ? '請先走到建築門口' : '請先走到傳送門上' });
+        socket.emit('teleport-error', { error: portal.zone ? '請先走到建築門口' : '請先走到傳送點上' });
         return;
       }
     }
