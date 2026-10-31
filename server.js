@@ -1180,7 +1180,11 @@ const GROUND_ITEM_TICK_MS = 5 * 1000;         // 自動刷道具 + 清除過期�
 // 不另設數量上限：每個道具 30 分鐘沒人撿就清除（GROUND_ITEM_TTL_MS），所以一個房間自然最多累積約 10 個，
 // 再加上整個房間 MAX_GROUND_ITEMS_PER_ROOM 的總量上限。
 // ITEM_SPAWN_POOLS 指定某些房間只刷符合主題的道具；沒列在裡面的房間從整個 ITEM_CATALOG 隨機挑。
+// ITEM_SPAWN_EVERY_MS_BY_ROOM 讓個別房間用不同頻率（集會廣場人最多，每分鐘一個，最多累積約 30 個）。
 const ITEM_SPAWN_EVERY_MS = 3 * 60 * 1000;
+const ITEM_SPAWN_EVERY_MS_BY_ROOM = {
+  main: 60 * 1000
+};
 const ITEM_SPAWN_POOLS = {
   main:    ['shell', 'starfish', 'pearl'],
   annex1:  ['towel', 'bottle', 'medal'],
@@ -1389,7 +1393,7 @@ function tickGroundItems() {
     room.groundItems.forEach((it) => {
       if (it.expiresAt <= now) removeGroundItem(room, it.id);
     });
-    if (now - room.lastItemSpawnAt < ITEM_SPAWN_EVERY_MS) return;
+    if (now - room.lastItemSpawnAt < (ITEM_SPAWN_EVERY_MS_BY_ROOM[roomId] || ITEM_SPAWN_EVERY_MS)) return;
     if (room.groundItems.size >= MAX_GROUND_ITEMS_PER_ROOM) return;
     const pool = ITEM_SPAWN_POOLS[roomId] || ALL_ITEM_CODES;
     const code = pool[Math.floor(Math.random() * pool.length)];
