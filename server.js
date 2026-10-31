@@ -1581,6 +1581,8 @@ io.on('connection', (socket) => {
     if (!(storedDoll.ok && storedDoll.doll) || (data && data.dollChanged)) {
       saveDoll(memberId, doll).then((r) => { if (!r.ok) console.error('❌ 儲存紙娃娃設定失敗：', r.error); });
     }
+    // 記下「資料庫裡目前的裝扮」，離線時比對，有改過但沒存到的才補存（見 disconnect）
+    socket.data.savedDollKey = JSON.stringify(doll);
     // 背包：記憶體有就用，沒有才讀資料庫；讀取失敗不阻擋進場，只是這次不能撿東西
     await ensureInventoryLoaded(memberId);
     if (socket.data.charId) return;
@@ -1788,6 +1790,7 @@ io.on('connection', (socket) => {
     room.characters[id].doll = doll;
     io.to(roomId).emit('char-doll-changed', { id, doll });
     const result = await saveDoll(memberId, doll);
+    if (result.ok) socket.data.savedDollKey = JSON.stringify(doll);
     socket.emit('doll-saved', result);
   });
 
@@ -1955,7 +1958,7 @@ io.on('connection', (socket) => {
     removeGroundItem(ctx.room, item.id);
     inventories.set(ctx.memberId, result.slots);
     const def = ITEM_CATALOG[item.code];
-    socket.emit('inventory-changed', { slots: result.slots, notice: `撿到 ${def.icon} ${def.name} ×${item.qty}` });
+    socket.emit('inventory-changed', { slots: result.slots, action: 'pickup', notice: `撿到 ${def.icon} ${def.name} ×${item.qty}` });
     queueInventorySave(ctx.memberId, result.slots);
   });
 
@@ -1983,7 +1986,7 @@ io.on('connection', (socket) => {
       source: 'drop'
     });
     inventories.set(ctx.memberId, result.slots);
-    socket.emit('inventory-changed', { slots: result.slots });
+    socket.emit('inventory-changed', { slots: result.slots, action: 'drop' });
     queueInventorySave(ctx.memberId, result.slots);
   });
 
@@ -2001,7 +2004,7 @@ io.on('connection', (socket) => {
       return;
     }
     inventories.set(ctx.memberId, result.slots);
-    socket.emit('inventory-changed', { slots: result.slots });
+    socket.emit('inventory-changed', { slots: result.slots, action: 'discard' });
     queueInventorySave(ctx.memberId, result.slots);
   });
 
@@ -2010,7 +2013,8 @@ io.on('connection', (socket) => {
     // 只有「onlineMembers 裡記錄的還是自己這條連線」才清掉；如果這個
     // memberId 已經被更新的連線覆蓋過去（代表自己是被踢掉的那個舊連線），
     // 就不要動它，避免把新連線剛寫入的記錄誤刪。
-    if (socket.data.memberId && onlineMembers.get(socket.data.memberId) === socket.id) {
+    const isCurrentConnection = socket.data.memberId && onlineMembers.get(socket.data.memberId) === socket.id;
+    if (isCurrentConnection) {
       onlineMembers.delete(socket.data.memberId);
     }
 
@@ -2018,6 +2022,13 @@ io.on('connection', (socket) => {
     const id = socket.data.charId;
     const room = getRoom(roomId);
     if (room && id && room.characters[id]) {
+      // 登出 / 關閉分頁時保存離線當下的裝扮：只有跟資料庫不一樣（例如換裝後馬上登出、
+      // 存檔被節流或失敗）才補存，下次登入就能選「上次的裝扮」。
+      // 被同帳號新登入踢掉的舊連線不存，避免舊裝扮蓋掉新連線剛選的裝扮。
+      const lastDoll = room.characters[id].doll;
+      if (isCurrentConnection && lastDoll && JSON.stringify(lastDoll) !== socket.data.savedDollKey) {
+        saveDoll(socket.data.memberId, lastDoll).then((r) => { if (!r.ok) console.error('❌ 離線時儲存紙娃娃設定失敗：', r.error); });
+      }
       const name = room.characters[id].name;
       delete room.characters[id];
       io.to(roomId).emit('char-left', { id });
