@@ -259,16 +259,26 @@ const DEFAULT_ROOM_ID = 'main';
 // 每個房間各自的即時狀態：角色清單、聊天紀錄。重啟伺服器會清空
 // （如需持久化可換成資料庫）。
 const rooms = Object.create(null);
+
+// 建立一個房間的即時狀態。固定房間（ROOMS_CONFIG）跟動態建立的活動分類房間
+// 都走這裡，新增房間狀態欄位（例如地上道具）只要改這一處，不會漏掉其中一種。
+function createRoomState(fields) {
+  return Object.assign({
+    characters: Object.create(null), // id -> {id,name,hair,body,x,y,ownerSocketId}
+    chatLog: [],                     // {who, charId, text, isSystem, ts}
+    groundItems: new Map(),          // 地上的道具：id -> {id,code,qty,x,y,source,expiresAt}，見「背包與地上道具」
+    lastItemSpawnAt: 0               // 這個房間上一次自動刷道具的時間（見 tickGroundItems）
+  }, fields);
+}
+
 Object.keys(ROOMS_CONFIG).forEach((roomId) => {
   const cfg = ROOMS_CONFIG[roomId];
-  rooms[roomId] = {
+  rooms[roomId] = createRoomState({
     id: cfg.id,
     name: cfg.name,
     background: cfg.background || null,
-    portals: cfg.portals || [],
-    characters: Object.create(null), // id -> {id,name,hair,body,x,y,ownerSocketId}
-    chatLog: []                      // {who, charId, text, isSystem, ts}
-  };
+    portals: cfg.portals || []
+  });
 });
 
 // 啟動時把管理員之前透過後台選過的房間底圖蓋回去，這樣重啟伺服器
@@ -934,7 +944,7 @@ function ensureEventRoomsAndPortals(sorts) {
       // 透過後台幫這個房間選過固定底圖並存進狀態檔，這裡要蓋回去，
       // 不然每次伺服器重啟、這個分類房間重新被建立時又會變回沒有指定。
       const persistedBg = (initialBackgroundState.roomBackgrounds || {})[roomId] || null;
-      rooms[roomId] = {
+      rooms[roomId] = createRoomState({
         id: roomId,
         name: sort.name,
         background: persistedBg, // 沒有另外指定底圖時，套用隨機底圖邏輯
@@ -943,11 +953,9 @@ function ensureEventRoomsAndPortals(sorts) {
           // 這樣「回大廳」的傳送點視覺上跟玩家記憶中的位置對得起來。
           { to: 'annex1', x: computeEventPortalPosition(0).x, y: computeEventPortalPosition(0).y, label: '活動報名' }
         ],
-        characters: Object.create(null),
-        chatLog: [],
         isEventRoom: true,
         sortNo: sort.no
-      };
+      });
     } else {
       // 分類名稱可能之後在後台改過，房間名稱跟著更新
       rooms[roomId].name = sort.name;
@@ -1132,6 +1140,345 @@ app.post('/admin/set-room-background', async (req, res) => {
 });
 
 // ---------------------------------------------------------------
+// 背包與地上道具
+//
+// 資料形狀：
+//   ITEM_CATALOG   道具種類登錄表 code -> { name, icon, maxStack }。目前沒有道具美術，
+//                  icon 先用 emoji；之後有圖再加欄位即可。**不要刪除已發出去的 code**，
+//                  sanitizeInventory 會丟掉不在表裡的 code，等於玩家的道具會在下次存檔時消失。
+//   背包 slots     [{ code, qty }]，同種道具堆疊在同一格，所以最多 50 種；以陣列順序為格子順序。
+//   地上道具       room.groundItems：id -> { id, code, qty, x, y, source, expiresAt }
+//                  source = 'spawn'（伺服器自動刷）/ 'admin'（後台放置）/ 'drop'（玩家丟下）
+//                  expiresAt = 到期時間（毫秒），null = 不會消失（只有 drop 會到期）
+//
+// 伺服器是唯一真相：背包記憶體版（inventories）在伺服器執行期間是權威，每次變動後
+// 把「完整背包」排進存檔佇列寫回資料庫（inventory_api.asp）；前端只能送 pickup-item /
+// drop-item / discard-item，伺服器驗證後才改。
+// ---------------------------------------------------------------
+const ITEM_CATALOG = Object.assign(Object.create(null), {
+  shell:    { name: '貝殼',   icon: '🐚', maxStack: 99 },
+  starfish: { name: '海星',   icon: '⭐', maxStack: 99 },
+  goggles:  { name: '泳鏡',   icon: '🥽', maxStack: 99 },
+  medal:    { name: '獎牌',   icon: '🏅', maxStack: 99 },
+  towel:    { name: '毛巾',   icon: '🧣', maxStack: 99 },
+  bottle:   { name: '水壺',   icon: '🥤', maxStack: 99 },
+  swim_cap: { name: '泳帽',   icon: '🧢', maxStack: 99 },
+  pearl:    { name: '珍珠',   icon: '🦪', maxStack: 99 }
+});
+// 送給前端 / 後台的是一般物件（目錄本身是無原型物件，避免 code 剛好叫 constructor 之類時查到內建屬性）
+const ITEM_CATALOG_PAYLOAD = Object.assign({}, ITEM_CATALOG);
+const ITEM_CODE_RE = /^[a-z0-9_]{1,20}$/;
+
+const INVENTORY_MAX_SLOTS = 50;               // 背包格數上限（同種道具堆疊同一格）
+const MAX_GROUND_ITEMS_PER_ROOM = 40;         // 每個房間地上最多同時有幾個道具
+const PICKUP_RANGE = 6;                       // 撿取距離（百分比座標，跟傳送點門口檢查同一套單位）
+const DROPPED_ITEM_TTL_MS = 10 * 60 * 1000;   // 玩家丟在地上的道具 10 分鐘後消失
+const ITEM_ACTION_MIN_INTERVAL_MS = 300;      // 撿取 / 丟下 / 丟棄的節流間隔
+const GROUND_ITEM_TICK_MS = 5 * 1000;         // 自動刷道具 + 清除過期道具的檢查週期
+
+// 自動刷道具規則（房間 id -> 規則）：房間裡「自動刷出來的」道具少於 max 個，
+// 且距離上次刷出已超過 everyMs，就在隨機位置刷出 pool 裡的一種。沒列在這裡的房間不會自動刷。
+const ITEM_SPAWN_RULES = {
+  main:    { max: 5, everyMs: 60 * 1000, pool: ['shell', 'starfish', 'pearl'] },
+  annex1:  { max: 3, everyMs: 90 * 1000, pool: ['towel', 'bottle', 'medal'] },
+  b_pool:  { max: 4, everyMs: 60 * 1000, pool: ['goggles', 'swim_cap', 'towel', 'bottle'] },
+  b_sport: { max: 3, everyMs: 90 * 1000, pool: ['medal', 'bottle', 'goggles'] }
+};
+
+// 背包資料庫存取（inventory_api.asp）：跟 character_api.asp 一樣是 server-to-server，
+// KEY 要跟 inventory_api.asp 裡的 API_KEY 一致，兩邊都建議改成環境變數。
+const INVENTORY_API_URL = process.env.INVENTORY_API_URL || 'https://www.swimlife.tw/alex/game/online/inventory_api.asp';
+const INVENTORY_API_KEY = process.env.INVENTORY_API_KEY || 'a1b2c3d4e5';
+const INVENTORY_API_TIMEOUT_MS = 8000; // ASP 沒回應時不要讓玩家的 join 一直卡住
+
+// 驗證並整理背包：只留目錄裡有的 code、數量為 1..maxStack 的整數、同 code 只留第一筆、最多 50 格
+function sanitizeInventory(raw) {
+  const slots = [];
+  const seen = new Set();
+  (Array.isArray(raw) ? raw : []).forEach((s) => {
+    if (slots.length >= INVENTORY_MAX_SLOTS || !s || typeof s.code !== 'string') return;
+    const def = ITEM_CATALOG[s.code];
+    const qty = Number(s.qty);
+    if (!def || seen.has(s.code) || !Number.isInteger(qty) || qty < 1 || qty > def.maxStack) return;
+    seen.add(s.code);
+    slots.push({ code: s.code, qty });
+  });
+  return slots;
+}
+
+// 讀取會員背包：{ ok:true, slots } 或 { ok:false, error }
+function fetchInventory(memberNo) {
+  return new Promise((resolve) => {
+    const url = `${INVENTORY_API_URL}?action=getinv&member_no=${encodeURIComponent(memberNo)}&key=${encodeURIComponent(INVENTORY_API_KEY)}`;
+    const req = https.get(url, (res) => {
+      let body = '';
+      res.on('data', (chunk) => { body += chunk; });
+      res.on('end', () => {
+        try {
+          const parsed = JSON.parse(body);
+          if (!parsed || !parsed.ok) return resolve({ ok: false, error: (parsed && parsed.error) || 'getinv 失敗' });
+          resolve({ ok: true, slots: sanitizeInventory(parsed.items) });
+        } catch (e) {
+          resolve({ ok: false, error: 'inventory_api.asp（getinv）回傳格式錯誤' });
+        }
+      });
+    });
+    req.setTimeout(INVENTORY_API_TIMEOUT_MS, () => req.destroy(new Error('逾時')));
+    req.on('error', (err) => {
+      resolve({ ok: false, error: '無法連線到 inventory_api.asp：' + err.message });
+    });
+  });
+}
+
+// 儲存會員背包（一律寫入完整內容，slots 必須已經過 sanitizeInventory 或由 addToInventory 等產生）
+function saveInventory(memberNo, slots) {
+  return new Promise((resolve) => {
+    const form = new URLSearchParams({
+      member_no: String(memberNo),
+      items: slots.map((s) => `${s.code}:${s.qty}`).join('|'),
+      key: INVENTORY_API_KEY
+    }).toString();
+    const target = new URL(`${INVENTORY_API_URL}?action=saveinv`);
+    const req = https.request({
+      hostname: target.hostname,
+      path: target.pathname + target.search,
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Content-Length': Buffer.byteLength(form)
+      }
+    }, (res) => {
+      let body = '';
+      res.on('data', (chunk) => { body += chunk; });
+      res.on('end', () => {
+        try {
+          const parsed = JSON.parse(body);
+          resolve(parsed && parsed.ok ? { ok: true } : { ok: false, error: (parsed && parsed.error) || 'saveinv 失敗' });
+        } catch (e) {
+          resolve({ ok: false, error: 'inventory_api.asp（saveinv）回傳格式錯誤' });
+        }
+      });
+    });
+    req.setTimeout(INVENTORY_API_TIMEOUT_MS, () => req.destroy(new Error('逾時')));
+    req.on('error', (err) => {
+      resolve({ ok: false, error: '無法連線到 inventory_api.asp：' + err.message });
+    });
+    req.write(form);
+    req.end();
+  });
+}
+
+// ---- 背包的記憶體狀態 ----
+// inventories：memberId -> slots。讀取資料庫失敗時**不放進去**（絕不用空背包蓋掉資料庫），
+// 沒有這筆就代表「背包沒載入」，撿取 / 丟下 / 丟棄都會被拒絕。slots 陣列一律視為不可變，
+// 每次變動都換成新陣列，所以排進存檔佇列的內容不會被後續操作改到。
+const inventories = new Map();
+const inventoryLoading = new Map(); // memberId -> 進行中的讀取 Promise（同時多次讀取只打一次 ASP）
+
+// 取得會員背包：記憶體有就直接用，沒有才讀資料庫；讀取失敗回傳 null
+function ensureInventoryLoaded(memberId) {
+  if (inventories.has(memberId)) return Promise.resolve(inventories.get(memberId));
+  let loading = inventoryLoading.get(memberId);
+  if (!loading) {
+    loading = fetchInventory(memberId).then((r) => {
+      inventoryLoading.delete(memberId);
+      if (!r.ok) {
+        console.error('❌ 讀取背包失敗：', r.error);
+        return null;
+      }
+      if (!inventories.has(memberId)) inventories.set(memberId, r.slots);
+      return inventories.get(memberId);
+    });
+    inventoryLoading.set(memberId, loading);
+  }
+  return loading;
+}
+
+// 存檔佇列：同一個會員的寫入排成一串依序送出，避免兩次存檔在網路上交錯、讓舊內容後到蓋掉新內容。
+// 每次都寫完整背包，所以中間某次失敗，下一次成功就會補回來。
+const inventorySaveChains = new Map(); // memberId -> 最後一個存檔的 Promise
+function queueInventorySave(memberId, slots) {
+  const prev = inventorySaveChains.get(memberId) || Promise.resolve();
+  const next = prev.then(() => saveInventory(memberId, slots)).then((r) => {
+    if (!r.ok) console.error('❌ 儲存背包失敗：', r.error);
+  });
+  inventorySaveChains.set(memberId, next);
+  next.then(() => {
+    if (inventorySaveChains.get(memberId) === next) inventorySaveChains.delete(memberId);
+  });
+}
+
+// 背包運算（純函式，回傳新陣列，不改傳進來的 slots）
+// 成功回傳 { slots }，失敗回傳 { error }
+function addToInventory(slots, code, qty) {
+  const def = ITEM_CATALOG[code];
+  if (!def) return { error: '不明的道具' };
+  const idx = slots.findIndex((s) => s.code === code);
+  if (idx >= 0) {
+    if (slots[idx].qty + qty > def.maxStack) return { error: '這個道具已達堆疊上限' };
+    const next = slots.slice();
+    next[idx] = { code, qty: slots[idx].qty + qty };
+    return { slots: next };
+  }
+  if (slots.length >= INVENTORY_MAX_SLOTS) return { error: `背包已滿（${INVENTORY_MAX_SLOTS} 格）` };
+  return { slots: slots.concat([{ code, qty }]) };
+}
+
+// 整格移除（丟下 / 丟棄都是整疊），成功回傳 { slots, removed: {code, qty} }
+function removeFromInventory(slots, code) {
+  const idx = slots.findIndex((s) => s.code === code);
+  if (idx < 0) return { error: '背包裡沒有這個道具' };
+  return { slots: slots.filter((_, i) => i !== idx), removed: slots[idx] };
+}
+
+// ---- 地上道具 ----
+let groundItemCounter = 0;
+
+// 給前端的地上道具資料（不含 source / expiresAt 等內部欄位）
+function publicGroundItem(it) {
+  return { id: it.id, code: it.code, qty: it.qty, x: it.x, y: it.y };
+}
+
+function groundItemsPayload(room) {
+  return Array.from(room.groundItems.values()).map(publicGroundItem);
+}
+
+// 在房間裡放一個地上道具並廣播給同房間的人
+function addGroundItem(room, fields) {
+  groundItemCounter++;
+  const item = {
+    id: `g${groundItemCounter}`,
+    code: fields.code,
+    qty: fields.qty,
+    x: fields.x,
+    y: fields.y,
+    source: fields.source,
+    expiresAt: fields.expiresAt || null
+  };
+  room.groundItems.set(item.id, item);
+  io.to(room.id).emit('ground-item-added', { item: publicGroundItem(item) });
+  return item;
+}
+
+function removeGroundItem(room, itemId) {
+  if (!room.groundItems.delete(itemId)) return false;
+  io.to(room.id).emit('ground-item-removed', { id: itemId });
+  return true;
+}
+
+// 房間裡隨機一個放道具的位置：2.5D 房間在可走範圍內挑；平面房間避開上下邊緣
+// （下方 y 80 以後常有傳送點）
+function randomGroundPoint(room) {
+  const layout = getRoomLayout(room);
+  if (layout) return randomWalkablePoint(layout);
+  return [
+    Math.round(clampX(10 + Math.random() * 80) * 100) / 100,
+    Math.round(clampY(28 + Math.random() * 50) * 100) / 100
+  ];
+}
+
+// 定時檢查（idempotent，只看目前狀態）：先清掉過期的丟棄道具，再依 ITEM_SPAWN_RULES 補刷道具
+function tickGroundItems() {
+  const now = Date.now();
+  Object.keys(rooms).forEach((roomId) => {
+    const room = rooms[roomId];
+    room.groundItems.forEach((it) => {
+      if (it.expiresAt && it.expiresAt <= now) removeGroundItem(room, it.id);
+    });
+  });
+  Object.keys(ITEM_SPAWN_RULES).forEach((roomId) => {
+    const room = getRoom(roomId);
+    const rule = ITEM_SPAWN_RULES[roomId];
+    if (!room || now - room.lastItemSpawnAt < rule.everyMs) return;
+    if (room.groundItems.size >= MAX_GROUND_ITEMS_PER_ROOM) return;
+    let spawned = 0;
+    room.groundItems.forEach((it) => { if (it.source === 'spawn') spawned++; });
+    if (spawned >= rule.max) return;
+    const code = rule.pool[Math.floor(Math.random() * rule.pool.length)];
+    if (!ITEM_CATALOG[code]) return;
+    const p = randomGroundPoint(room);
+    addGroundItem(room, { code, qty: 1, x: p[0], y: p[1], source: 'spawn' });
+    room.lastItemSpawnAt = now;
+  });
+}
+setInterval(tickGroundItems, GROUND_ITEM_TICK_MS);
+
+// ---- 後台：地上道具管理 ----
+app.options('/admin/items', (req, res) => {
+  setCorsForAdmin(res);
+  res.sendStatus(204);
+});
+
+// 讀取不需要密碼（跟 /admin/rooms 一樣）：道具目錄 + 各房間目前地上有幾個道具
+app.get('/admin/items', (req, res) => {
+  setCorsForAdmin(res);
+  const list = Object.keys(rooms).map((roomId) => ({
+    id: roomId,
+    name: rooms[roomId].name,
+    groundCount: rooms[roomId].groundItems.size
+  }));
+  res.json({ ok: true, catalog: ITEM_CATALOG_PAYLOAD, rooms: list });
+});
+
+app.options('/admin/spawn-item', (req, res) => {
+  setCorsForAdmin(res);
+  res.sendStatus(204);
+});
+
+// 在指定房間的隨機位置放 count 個道具（每個數量 qty），來源記為 admin、不會自動消失
+app.post('/admin/spawn-item', (req, res) => {
+  setCorsForAdmin(res);
+  const secret = req.headers['x-admin-secret'] || (req.body && req.body.secret);
+  if (!secret || secret !== ADMIN_SECRET) {
+    return res.status(403).json({ ok: false, error: '密碼錯誤' });
+  }
+  const body = req.body || {};
+  const room = getRoom(body.roomId);
+  if (!room) return res.status(404).json({ ok: false, error: '房間不存在' });
+  const code = typeof body.code === 'string' && ITEM_CODE_RE.test(body.code) ? body.code : null;
+  const def = code && ITEM_CATALOG[code];
+  if (!def) return res.status(400).json({ ok: false, error: '道具不存在' });
+  const qty = Number(body.qty);
+  const count = Number(body.count);
+  if (!Number.isInteger(qty) || qty < 1 || qty > def.maxStack) {
+    return res.status(400).json({ ok: false, error: `數量必須是 1 到 ${def.maxStack} 的整數` });
+  }
+  if (!Number.isInteger(count) || count < 1 || count > 10) {
+    return res.status(400).json({ ok: false, error: '個數必須是 1 到 10 的整數' });
+  }
+
+  let placed = 0;
+  while (placed < count && room.groundItems.size < MAX_GROUND_ITEMS_PER_ROOM) {
+    const p = randomGroundPoint(room);
+    addGroundItem(room, { code, qty, x: p[0], y: p[1], source: 'admin' });
+    placed++;
+  }
+  if (placed === 0) {
+    return res.status(400).json({ ok: false, error: `這個房間地上的道具已達上限（${MAX_GROUND_ITEMS_PER_ROOM} 個）` });
+  }
+  return res.json({ ok: true, placed, requested: count, groundCount: room.groundItems.size });
+});
+
+app.options('/admin/clear-items', (req, res) => {
+  setCorsForAdmin(res);
+  res.sendStatus(204);
+});
+
+// 清空指定房間地上所有道具（包含玩家丟的、自動刷的）
+app.post('/admin/clear-items', (req, res) => {
+  setCorsForAdmin(res);
+  const secret = req.headers['x-admin-secret'] || (req.body && req.body.secret);
+  if (!secret || secret !== ADMIN_SECRET) {
+    return res.status(403).json({ ok: false, error: '密碼錯誤' });
+  }
+  const room = getRoom(req.body && req.body.roomId);
+  if (!room) return res.status(404).json({ ok: false, error: '房間不存在' });
+  const ids = Array.from(room.groundItems.keys());
+  ids.forEach((itemId) => removeGroundItem(room, itemId));
+  return res.json({ ok: true, removed: ids.length, groundCount: room.groundItems.size });
+});
+
+// ---------------------------------------------------------------
 // In-memory 狀態（重啟伺服器會清空；如需持久化可換成資料庫）
 // 角色跟聊天紀錄已經改成「每個房間各自一份」，存在上面的 rooms 物件裡；
 // 這裡只留跨房間共用的東西（角色外觀色票、角色編號流水號）。
@@ -1232,6 +1579,8 @@ io.on('connection', (socket) => {
     if (!(storedDoll.ok && storedDoll.doll) || (data && data.dollChanged)) {
       saveDoll(memberId, doll).then((r) => { if (!r.ok) console.error('❌ 儲存紙娃娃設定失敗：', r.error); });
     }
+    // 背包：記憶體有就用，沒有才讀資料庫；讀取失敗不阻擋進場，只是這次不能撿東西
+    await ensureInventoryLoaded(memberId);
     if (socket.data.charId) return;
 
     const existingSocketId = onlineMembers.get(memberId);
@@ -1319,7 +1668,10 @@ io.on('connection', (socket) => {
       brightness: currentBrightness,
       eventLinks,
       bodyCustomization,
-      scene: getRoomScenePayload(room)
+      scene: getRoomScenePayload(room),
+      itemCatalog: ITEM_CATALOG_PAYLOAD,
+      groundItems: groundItemsPayload(room),
+      inventory: inventories.get(memberId) || null // null = 背包讀取失敗
     });
 
     // 廣播給同房間的其他人：有新角色加入
@@ -1541,7 +1893,8 @@ io.on('connection', (socket) => {
       background,
       brightness: currentBrightness,
       eventLinks,
-      scene: getRoomScenePayload(toRoom)
+      scene: getRoomScenePayload(toRoom),
+      groundItems: groundItemsPayload(toRoom)
     });
 
     // 廣播給新房間的其他人：有角色傳送進來了
@@ -1550,6 +1903,104 @@ io.on('connection', (socket) => {
     pushChat(toRoom, joinMsg);
     io.to(toRoomId).emit('chat-message', joinMsg);
     broadcastCount(toRoomId);
+  });
+
+  // ---- 背包：撿取 / 丟到地上 / 丟棄 ----
+  // 共同規則：只動這條連線自己的角色與自己的背包；背包沒載入（資料庫讀取失敗）一律拒絕，
+  // 避免用空背包蓋掉資料庫。每次變動後把完整背包排進存檔佇列。
+  // 取得本次道具動作的上下文並節流，不合法或太頻繁回傳 null
+  function getItemActionContext() {
+    const room = getRoom(socket.data.roomId);
+    const id = socket.data.charId;
+    const memberId = socket.data.memberId;
+    if (!room || !id || !room.characters[id] || !memberId) return null;
+    const now = Date.now();
+    if (socket.data.lastItemActionAt && now - socket.data.lastItemActionAt < ITEM_ACTION_MIN_INTERVAL_MS) return null;
+    socket.data.lastItemActionAt = now;
+    return { room, ch: room.characters[id], memberId };
+  }
+
+  // 背包沒載入時回報錯誤，並在背景重試讀取一次（成功就把背包推給玩家）
+  function refuseUnloadedInventory(memberId, errorText) {
+    socket.emit('item-error', { error: errorText });
+    ensureInventoryLoaded(memberId).then((slots) => {
+      if (slots) socket.emit('inventory-changed', { slots });
+    });
+  }
+
+  // 撿取：玩家走到道具旁後送出。道具從房間移除必須在任何 await 之前完成（同步），
+  // 兩個人同時撿同一個道具時，只有先處理到的那個拿得到。
+  socket.on('pickup-item', (data) => {
+    const ctx = getItemActionContext();
+    if (!ctx) return;
+    const itemId = data && typeof data.itemId === 'string' ? data.itemId.slice(0, 20) : '';
+    const item = ctx.room.groundItems.get(itemId);
+    if (!item) {
+      socket.emit('item-error', { error: '這個道具已經不見了' });
+      return;
+    }
+    if (Math.hypot(ctx.ch.x - item.x, ctx.ch.y - item.y) > PICKUP_RANGE) {
+      socket.emit('item-error', { error: '離道具太遠了，請再靠近一點' });
+      return;
+    }
+    const slots = inventories.get(ctx.memberId);
+    if (!slots) return refuseUnloadedInventory(ctx.memberId, '背包讀取失敗，暫時無法撿取道具');
+    const result = addToInventory(slots, item.code, item.qty);
+    if (result.error) {
+      socket.emit('item-error', { error: result.error });
+      return;
+    }
+    removeGroundItem(ctx.room, item.id);
+    inventories.set(ctx.memberId, result.slots);
+    const def = ITEM_CATALOG[item.code];
+    socket.emit('inventory-changed', { slots: result.slots, notice: `撿到 ${def.icon} ${def.name} ×${item.qty}` });
+    queueInventorySave(ctx.memberId, result.slots);
+  });
+
+  // 丟到地上：整疊丟在角色腳邊，其他人可以撿，10 分鐘後消失
+  socket.on('drop-item', (data) => {
+    const ctx = getItemActionContext();
+    if (!ctx) return;
+    const code = data && typeof data.code === 'string' && ITEM_CODE_RE.test(data.code) ? data.code : null;
+    if (!code) return;
+    const slots = inventories.get(ctx.memberId);
+    if (!slots) return refuseUnloadedInventory(ctx.memberId, '背包讀取失敗，暫時無法丟下道具');
+    if (ctx.room.groundItems.size >= MAX_GROUND_ITEMS_PER_ROOM) {
+      socket.emit('item-error', { error: '這個房間地上的道具太多了，晚點再丟' });
+      return;
+    }
+    const result = removeFromInventory(slots, code);
+    if (result.error) {
+      socket.emit('item-error', { error: result.error });
+      return;
+    }
+    // 腳邊稍微錯開，連續丟好幾種才不會疊在同一個點上
+    const p = placeInRoom(ctx.room, ctx.ch.x + (Math.random() - 0.5) * 4, ctx.ch.y + Math.random() * 2);
+    addGroundItem(ctx.room, {
+      code, qty: result.removed.qty, x: p[0], y: p[1],
+      source: 'drop', expiresAt: Date.now() + DROPPED_ITEM_TTL_MS
+    });
+    inventories.set(ctx.memberId, result.slots);
+    socket.emit('inventory-changed', { slots: result.slots });
+    queueInventorySave(ctx.memberId, result.slots);
+  });
+
+  // 丟棄：整疊直接刪除，不會出現在地上
+  socket.on('discard-item', (data) => {
+    const ctx = getItemActionContext();
+    if (!ctx) return;
+    const code = data && typeof data.code === 'string' && ITEM_CODE_RE.test(data.code) ? data.code : null;
+    if (!code) return;
+    const slots = inventories.get(ctx.memberId);
+    if (!slots) return refuseUnloadedInventory(ctx.memberId, '背包讀取失敗，暫時無法丟棄道具');
+    const result = removeFromInventory(slots, code);
+    if (result.error) {
+      socket.emit('item-error', { error: result.error });
+      return;
+    }
+    inventories.set(ctx.memberId, result.slots);
+    socket.emit('inventory-changed', { slots: result.slots });
+    queueInventorySave(ctx.memberId, result.slots);
   });
 
   // ---- 離線：把角色從場景移除，通知大家 ----
