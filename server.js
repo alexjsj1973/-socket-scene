@@ -1176,13 +1176,16 @@ const GROUND_ITEM_TTL_MS = 30 * 60 * 1000;    // 地上道具（自動刷 / 後�
 const ITEM_ACTION_MIN_INTERVAL_MS = 300;      // 撿取 / 丟下 / 丟棄的節流間隔
 const GROUND_ITEM_TICK_MS = 5 * 1000;         // 自動刷道具 + 清除過期道具的檢查週期
 
-// 自動刷道具規則（房間 id -> 規則）：房間裡「自動刷出來的」道具少於 max 個，
-// 且距離上次刷出已超過 everyMs，就在隨機位置刷出 pool 裡的一種。沒列在這裡的房間不會自動刷。
-const ITEM_SPAWN_RULES = {
-  main:    { max: 5, everyMs: 60 * 1000, pool: ['shell', 'starfish', 'pearl'] },
-  annex1:  { max: 3, everyMs: 90 * 1000, pool: ['towel', 'bottle', 'medal'] },
-  b_pool:  { max: 4, everyMs: 60 * 1000, pool: ['goggles', 'swim_cap', 'towel', 'bottle'] },
-  b_sport: { max: 3, everyMs: 90 * 1000, pool: ['medal', 'bottle', 'goggles'] }
+// 自動刷道具：每個房間（含動態建立的活動分類房間）各自每 ITEM_SPAWN_EVERY_MS 在隨機位置刷出一個道具。
+// 不另設數量上限：每個道具 30 分鐘沒人撿就清除（GROUND_ITEM_TTL_MS），所以一個房間自然最多累積約 10 個，
+// 再加上整個房間 MAX_GROUND_ITEMS_PER_ROOM 的總量上限。
+// ITEM_SPAWN_POOLS 指定某些房間只刷符合主題的道具；沒列在裡面的房間從整個 ITEM_CATALOG 隨機挑。
+const ITEM_SPAWN_EVERY_MS = 3 * 60 * 1000;
+const ITEM_SPAWN_POOLS = {
+  main:    ['shell', 'starfish', 'pearl'],
+  annex1:  ['towel', 'bottle', 'medal'],
+  b_pool:  ['goggles', 'swim_cap', 'towel', 'bottle'],
+  b_sport: ['medal', 'bottle', 'goggles']
 };
 
 // 背包資料庫存取（inventory_api.asp）：跟 character_api.asp 一樣是 server-to-server，
@@ -1377,7 +1380,8 @@ function randomGroundPoint(room) {
   ];
 }
 
-// 定時檢查（idempotent，只看目前狀態）：先清掉過期的丟棄道具，再依 ITEM_SPAWN_RULES 補刷道具
+// 定時檢查（idempotent，只看目前狀態）：先清掉過期的道具，再幫距離上次刷出已超過 ITEM_SPAWN_EVERY_MS 的房間刷一個
+const ALL_ITEM_CODES = Object.keys(ITEM_CATALOG);
 function tickGroundItems() {
   const now = Date.now();
   Object.keys(rooms).forEach((roomId) => {
@@ -1385,16 +1389,10 @@ function tickGroundItems() {
     room.groundItems.forEach((it) => {
       if (it.expiresAt <= now) removeGroundItem(room, it.id);
     });
-  });
-  Object.keys(ITEM_SPAWN_RULES).forEach((roomId) => {
-    const room = getRoom(roomId);
-    const rule = ITEM_SPAWN_RULES[roomId];
-    if (!room || now - room.lastItemSpawnAt < rule.everyMs) return;
+    if (now - room.lastItemSpawnAt < ITEM_SPAWN_EVERY_MS) return;
     if (room.groundItems.size >= MAX_GROUND_ITEMS_PER_ROOM) return;
-    let spawned = 0;
-    room.groundItems.forEach((it) => { if (it.source === 'spawn') spawned++; });
-    if (spawned >= rule.max) return;
-    const code = rule.pool[Math.floor(Math.random() * rule.pool.length)];
+    const pool = ITEM_SPAWN_POOLS[roomId] || ALL_ITEM_CODES;
+    const code = pool[Math.floor(Math.random() * pool.length)];
     if (!ITEM_CATALOG[code]) return;
     const p = randomGroundPoint(room);
     addGroundItem(room, { code, qty: 1, x: p[0], y: p[1], source: 'spawn' });
