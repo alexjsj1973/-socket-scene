@@ -86,6 +86,10 @@ function defaultBgPrefixForRoom(room) {
 async function getRoomBackgroundUrl(room) {
   if (!room) return null;
   let filename = room.background;
+  if (!filename && Array.isArray(room.backgroundPool) && room.backgroundPool.length) {
+    // 房間指定了隨機底圖的候選清單（例如線上競賽只用 bg1～bg4）
+    filename = room.backgroundPool[Math.floor(Math.random() * room.backgroundPool.length)];
+  }
   if (!filename) {
     filename = await pickRandomDefaultBg(defaultBgPrefixForRoom(room));
     if (!filename) return null;
@@ -184,7 +188,10 @@ const ROOMS_CONFIG = {
       { to: 'b_member', label: '會員專區', x: 79.5, y: 46, spawn: [72.8, 48.04], zone: [[81, 37], [99, 37], [99, 56], [81, 56]] },
       { to: 'b_match', label: '專業媒合', x: 16.5, y: 62, spawn: [23.35, 60.57], zone: [[1, 62], [17, 62], [17, 82], [1, 82]] },
       { to: 'b_news', label: '新聞資訊', x: 32, y: 72, spawn: [37.09, 67.19], zone: [[22, 71], [41, 71], [41, 92], [22, 92]] },
-      { to: 'annex2', label: '教學課程', x: 78.4, y: 64.9, spawn: [72.38, 62.72], zone: [[77, 64], [99, 64], [99, 86], [77, 86]] }
+      { to: 'annex2', label: '教學課程', x: 78.4, y: 64.9, spawn: [72.38, 62.72], zone: [[77, 64], [99, 64], [99, 86], [77, 86]] },
+      // 廣場正中間下方空地的金色傳送門：touch = 角色走到（碰到）傳送門就自動傳送，不用點；
+      // spawn 放在傳送門上方一段距離，從線上競賽回來時不會一出現就又被傳走
+      { to: 'contest', label: '線上競賽', x: 52.5, y: 85, spawn: [52.5, 74], touch: true }
     ]
   },
   annex1: {
@@ -252,6 +259,15 @@ const ROOMS_CONFIG = {
     name: '新聞資訊',
     background: null,
     portals: [ { to: 'main', x: 92, y: 86, label: '回到廣場' } ]
+  },
+  // 線上競賽：從廣場中間下方的金色傳送門進來。地面先從 bg1～bg4 隨機挑一張（backgroundPool），
+  // 每次玩家進來都重新抽；之後有專屬底圖時，改成 background: '檔名' 或從後台指定即可
+  contest: {
+    id: 'contest',
+    name: '線上競賽',
+    background: null,
+    backgroundPool: ['bg1.jpg', 'bg2.jpg', 'bg3.jpg', 'bg4.jpg'],
+    portals: [ { to: 'main', x: 92, y: 86, label: '回到廣場' } ]
   }
 };
 const DEFAULT_ROOM_ID = 'main';
@@ -277,6 +293,7 @@ Object.keys(ROOMS_CONFIG).forEach((roomId) => {
     id: cfg.id,
     name: cfg.name,
     background: cfg.background || null,
+    backgroundPool: cfg.backgroundPool || null,
     portals: cfg.portals || []
   });
 });
@@ -1982,11 +1999,11 @@ io.on('connection', (socket) => {
       socket.emit('teleport-error', { error: '這個房間沒有通往那裡的傳送點' });
       return;
     }
-    // 建築入口：角色要真的走到門口附近才放行
-    if (portal.zone) {
+    // 建築入口 / 碰觸型傳送門：角色要真的走到門口（傳送門）附近才放行
+    if (portal.zone || portal.touch) {
       const me = fromRoom.characters[id];
       if (Math.hypot(me.x - portal.x, me.y - portal.y) > 8) {
-        socket.emit('teleport-error', { error: '請先走到建築門口' });
+        socket.emit('teleport-error', { error: portal.zone ? '請先走到建築門口' : '請先走到傳送門上' });
         return;
       }
     }
