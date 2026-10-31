@@ -1143,7 +1143,8 @@ app.post('/admin/set-room-background', async (req, res) => {
 // 背包與地上道具
 //
 // 資料形狀：
-//   ITEM_CATALOG   道具種類登錄表 code -> { name, icon, maxStack }。目前沒有道具美術，
+//   ITEM_CATEGORIES 道具分類（依 emoji 主題分組，後台與背包依這個順序顯示）
+//   ITEM_CATALOG   道具種類登錄表 code -> { name, icon, category, maxStack }。目前沒有道具美術，
 //                  icon 先用 emoji；之後有圖再加欄位即可。**不要刪除已發出去的 code**，
 //                  sanitizeInventory 會丟掉不在表裡的 code，等於玩家的道具會在下次存檔時消失。
 //   背包 slots     [{ code, qty }]，同種道具堆疊在同一格，所以最多 50 種；以陣列順序為格子順序。
@@ -1155,15 +1156,75 @@ app.post('/admin/set-room-background', async (req, res) => {
 // 把「完整背包」排進存檔佇列寫回資料庫（inventory_api.asp）；前端只能送 pickup-item /
 // drop-item / discard-item，伺服器驗證後才改。
 // ---------------------------------------------------------------
-const ITEM_CATALOG = Object.assign(Object.create(null), {
-  shell:    { name: '貝殼',   icon: '🐚', maxStack: 99 },
-  starfish: { name: '海星',   icon: '⭐', maxStack: 99 },
-  goggles:  { name: '泳鏡',   icon: '🥽', maxStack: 99 },
-  medal:    { name: '獎牌',   icon: '🏅', maxStack: 99 },
-  towel:    { name: '毛巾',   icon: '🧣', maxStack: 99 },
-  bottle:   { name: '水壺',   icon: '🥤', maxStack: 99 },
-  swim_cap: { name: '泳帽',   icon: '🧢', maxStack: 99 },
-  pearl:    { name: '珍珠',   icon: '🦪', maxStack: 99 }
+// 已發出去的 code（shell、starfish、goggles、medal、towel、bottle、swim_cap、pearl…）不能改名或刪除
+const ITEM_CATEGORIES = [
+  { id: 'sea', name: '海洋生物' },
+  { id: 'swim', name: '游泳用品' },
+  { id: 'award', name: '運動獎勵' },
+  { id: 'food', name: '食物飲料' },
+  { id: 'nature', name: '自然寶物' },
+  { id: 'fun', name: '收藏小物' }
+];
+const ITEM_CATALOG = Object.create(null);
+[
+  ['shell', '貝殼', '🐚', 'sea'],
+  ['starfish', '海星', '⭐', 'sea'],
+  ['pearl', '珍珠', '🦪', 'sea'],
+  ['fish', '小魚', '🐟', 'sea'],
+  ['tropical_fish', '熱帶魚', '🐠', 'sea'],
+  ['blowfish', '河豚', '🐡', 'sea'],
+  ['octopus', '章魚', '🐙', 'sea'],
+  ['crab', '螃蟹', '🦀', 'sea'],
+  ['shrimp', '蝦子', '🦐', 'sea'],
+  ['squid', '小卷', '🦑', 'sea'],
+  ['turtle', '海龜', '🐢', 'sea'],
+  ['dolphin', '海豚', '🐬', 'sea'],
+  ['whale', '鯨魚', '🐳', 'sea'],
+  ['coral', '珊瑚', '🪸', 'sea'],
+  ['goggles', '泳鏡', '🥽', 'swim'],
+  ['swim_cap', '泳帽', '🧢', 'swim'],
+  ['towel', '毛巾', '🧣', 'swim'],
+  ['bottle', '水壺', '🥤', 'swim'],
+  ['swimsuit', '連身泳衣', '🩱', 'swim'],
+  ['swim_shorts', '泳褲', '🩳', 'swim'],
+  ['bikini', '比基尼', '👙', 'swim'],
+  ['lifebuoy', '救生圈', '🛟', 'swim'],
+  ['sunglasses', '太陽眼鏡', '🕶️', 'swim'],
+  ['parasol', '海灘傘', '⛱️', 'swim'],
+  ['flipflops', '夾腳拖', '🩴', 'swim'],
+  ['medal', '獎牌', '🏅', 'award'],
+  ['gold_medal', '金牌', '🥇', 'award'],
+  ['silver_medal', '銀牌', '🥈', 'award'],
+  ['bronze_medal', '銅牌', '🥉', 'award'],
+  ['trophy', '獎盃', '🏆', 'award'],
+  ['honor_medal', '榮譽勳章', '🎖️', 'award'],
+  ['stopwatch', '碼錶', '⏱️', 'award'],
+  ['watermelon', '西瓜', '🍉', 'food'],
+  ['ice_cream', '冰淇淋', '🍦', 'food'],
+  ['shaved_ice', '剉冰', '🍧', 'food'],
+  ['juice', '果汁', '🧃', 'food'],
+  ['coconut', '椰子', '🥥', 'food'],
+  ['banana', '香蕉', '🍌', 'food'],
+  ['rice_ball', '飯糰', '🍙', 'food'],
+  ['bubble_tea', '珍珠奶茶', '🧋', 'food'],
+  ['clover', '幸運草', '🍀', 'nature'],
+  ['sakura', '櫻花', '🌸', 'nature'],
+  ['sunflower', '向日葵', '🌻', 'nature'],
+  ['maple_leaf', '楓葉', '🍁', 'nature'],
+  ['mushroom', '蘑菇', '🍄', 'nature'],
+  ['feather', '羽毛', '🪶', 'nature'],
+  ['gem', '寶石', '💎', 'nature'],
+  ['crystal_ball', '水晶球', '🔮', 'nature'],
+  ['balloon', '氣球', '🎈', 'fun'],
+  ['gift', '禮物', '🎁', 'fun'],
+  ['teddy_bear', '泰迪熊', '🧸', 'fun'],
+  ['old_key', '古老鑰匙', '🗝️', 'fun'],
+  ['coin', '金幣', '🪙', 'fun'],
+  ['ticket', '票券', '🎫', 'fun'],
+  ['kite', '風箏', '🪁', 'fun'],
+  ['love_letter', '情書', '💌', 'fun']
+].forEach(([code, name, icon, category]) => {
+  ITEM_CATALOG[code] = { name, icon, category, maxStack: 99 };
 });
 // 送給前端 / 後台的是一般物件（目錄本身是無原型物件，避免 code 剛好叫 constructor 之類時查到內建屬性）
 const ITEM_CATALOG_PAYLOAD = Object.assign({}, ITEM_CATALOG);
@@ -1179,17 +1240,18 @@ const GROUND_ITEM_TICK_MS = 5 * 1000;         // 自動刷道具 + 清除過期�
 // 自動刷道具：每個房間（含動態建立的活動分類房間）各自每 ITEM_SPAWN_EVERY_MS 在隨機位置刷出一個道具。
 // 不另設數量上限：每個道具 30 分鐘沒人撿就清除（GROUND_ITEM_TTL_MS），所以一個房間自然最多累積約 10 個，
 // 再加上整個房間 MAX_GROUND_ITEMS_PER_ROOM 的總量上限。
-// ITEM_SPAWN_POOLS 指定某些房間只刷符合主題的道具；沒列在裡面的房間從整個 ITEM_CATALOG 隨機挑。
+// 會刷出哪些道具由後台設定（見下方「自動刷道具的道具池」與 /admin/set-spawn-pool）。
 // ITEM_SPAWN_EVERY_MS_BY_ROOM 讓個別房間用不同頻率（集會廣場人最多，每分鐘一個，最多累積約 30 個）。
 const ITEM_SPAWN_EVERY_MS = 3 * 60 * 1000;
 const ITEM_SPAWN_EVERY_MS_BY_ROOM = {
   main: 60 * 1000
 };
-const ITEM_SPAWN_POOLS = {
-  main:    ['shell', 'starfish', 'pearl'],
-  annex1:  ['towel', 'bottle', 'medal'],
-  b_pool:  ['goggles', 'swim_cap', 'towel', 'bottle'],
-  b_sport: ['medal', 'bottle', 'goggles']
+// 第一次啟動（還沒有狀態檔）時的預設：這幾個房間刷符合主題的道具，其他房間跟「預設道具池」（null = 全部道具）
+const DEFAULT_ROOM_SPAWN_POOLS = {
+  main:    ['shell', 'starfish', 'pearl', 'fish', 'tropical_fish', 'crab', 'clover', 'balloon'],
+  annex1:  ['towel', 'bottle', 'medal', 'ticket', 'gift'],
+  b_pool:  ['goggles', 'swim_cap', 'towel', 'bottle', 'lifebuoy', 'swimsuit', 'swim_shorts'],
+  b_sport: ['medal', 'bottle', 'goggles', 'gold_medal', 'silver_medal', 'bronze_medal', 'trophy', 'stopwatch']
 };
 
 // 背包資料庫存取（inventory_api.asp）：跟 character_api.asp 一樣是 server-to-server，
@@ -1384,8 +1446,55 @@ function randomGroundPoint(room) {
   ];
 }
 
-// 定時檢查（idempotent，只看目前狀態）：先清掉過期的道具，再幫距離上次刷出已超過 ITEM_SPAWN_EVERY_MS 的房間刷一個
+// ---- 自動刷道具的道具池（後台設定，存在 data/item-spawn-state.json，重啟後保留）----
+// spawnPools.default：沒有個別設定的房間用這個，null = 全部道具
+// spawnPools.rooms[roomId]：這個房間自己的清單；沒有這筆 = 跟預設；空陣列 = 這個房間不刷道具
+const ITEM_SPAWN_STATE_FILE = path.join(STATE_DIR, 'item-spawn-state.json');
 const ALL_ITEM_CODES = Object.keys(ITEM_CATALOG);
+
+// 只留目錄裡有的 code、去重；不是陣列回傳 null
+function sanitizeCodeList(raw) {
+  if (!Array.isArray(raw)) return null;
+  return Array.from(new Set(raw.filter((c) => typeof c === 'string' && ITEM_CATALOG[c])));
+}
+
+function loadSpawnPools() {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(ITEM_SPAWN_STATE_FILE, 'utf8'));
+    const roomsCfg = Object.create(null);
+    Object.keys((parsed && parsed.rooms) || {}).forEach((roomId) => {
+      const list = sanitizeCodeList(parsed.rooms[roomId]);
+      if (list) roomsCfg[roomId] = list;
+    });
+    return { default: sanitizeCodeList(parsed && parsed.default), rooms: roomsCfg };
+  } catch (e) {
+    // 檔案不存在（第一次啟動）或壞掉：用程式裡的預設值
+    const roomsCfg = Object.create(null);
+    Object.keys(DEFAULT_ROOM_SPAWN_POOLS).forEach((roomId) => { roomsCfg[roomId] = sanitizeCodeList(DEFAULT_ROOM_SPAWN_POOLS[roomId]); });
+    return { default: null, rooms: roomsCfg };
+  }
+}
+
+function saveSpawnPools() {
+  try {
+    fs.writeFileSync(ITEM_SPAWN_STATE_FILE, JSON.stringify({ default: spawnPools.default, rooms: spawnPools.rooms, updatedAt: Date.now() }), 'utf8');
+  } catch (e) {
+    console.error('❌ 寫入道具池設定失敗，重啟後可能會變回預設值：', e.message);
+  }
+}
+
+const spawnPools = loadSpawnPools();
+
+function getSpawnPool(roomId) {
+  if (spawnPools.rooms[roomId]) return spawnPools.rooms[roomId];
+  return spawnPools.default || ALL_ITEM_CODES;
+}
+
+function spawnPoolsPayload() {
+  return { default: spawnPools.default, rooms: Object.assign({}, spawnPools.rooms) };
+}
+
+// 定時檢查（idempotent，只看目前狀態）：先清掉過期的道具，再幫距離上次刷出已超過 ITEM_SPAWN_EVERY_MS 的房間刷一個
 function tickGroundItems() {
   const now = Date.now();
   Object.keys(rooms).forEach((roomId) => {
@@ -1395,9 +1504,9 @@ function tickGroundItems() {
     });
     if (now - room.lastItemSpawnAt < (ITEM_SPAWN_EVERY_MS_BY_ROOM[roomId] || ITEM_SPAWN_EVERY_MS)) return;
     if (room.groundItems.size >= MAX_GROUND_ITEMS_PER_ROOM) return;
-    const pool = ITEM_SPAWN_POOLS[roomId] || ALL_ITEM_CODES;
+    const pool = getSpawnPool(roomId);
+    if (!pool.length) return;   // 後台把這個房間設成「不刷道具」
     const code = pool[Math.floor(Math.random() * pool.length)];
-    if (!ITEM_CATALOG[code]) return;
     const p = randomGroundPoint(room);
     addGroundItem(room, { code, qty: 1, x: p[0], y: p[1], source: 'spawn' });
     room.lastItemSpawnAt = now;
@@ -1419,7 +1528,40 @@ app.get('/admin/items', (req, res) => {
     name: rooms[roomId].name,
     groundCount: rooms[roomId].groundItems.size
   }));
-  res.json({ ok: true, catalog: ITEM_CATALOG_PAYLOAD, rooms: list });
+  res.json({ ok: true, catalog: ITEM_CATALOG_PAYLOAD, categories: ITEM_CATEGORIES, rooms: list, spawnPools: spawnPoolsPayload() });
+});
+
+app.options('/admin/set-spawn-pool', (req, res) => {
+  setCorsForAdmin(res);
+  res.sendStatus(204);
+});
+
+// 設定自動刷道具的道具池：
+//   roomId = '*'  → 設定預設道具池，codes = null 代表全部道具
+//   roomId = 房間 → codes = null 代表跟預設；[] 代表這個房間不刷道具
+app.post('/admin/set-spawn-pool', (req, res) => {
+  setCorsForAdmin(res);
+  const secret = req.headers['x-admin-secret'] || (req.body && req.body.secret);
+  if (!secret || secret !== ADMIN_SECRET) {
+    return res.status(403).json({ ok: false, error: '密碼錯誤' });
+  }
+  const body = req.body || {};
+  const roomId = body.roomId;
+  if (roomId !== '*' && !getRoom(roomId)) return res.status(404).json({ ok: false, error: '房間不存在' });
+  let codes = null;
+  if (body.codes !== null && body.codes !== undefined) {
+    codes = sanitizeCodeList(body.codes);
+    if (!codes) return res.status(400).json({ ok: false, error: 'codes 必須是陣列或 null' });
+  }
+  if (roomId === '*') {
+    spawnPools.default = codes;
+  } else if (codes) {
+    spawnPools.rooms[roomId] = codes;
+  } else {
+    delete spawnPools.rooms[roomId];
+  }
+  saveSpawnPools();
+  return res.json({ ok: true, spawnPools: spawnPoolsPayload() });
 });
 
 app.options('/admin/spawn-item', (req, res) => {
