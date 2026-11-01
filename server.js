@@ -282,7 +282,11 @@ const ROOMS_CONFIG = {
     portals: [
       { to: 'main', x: RETURN_PORTAL_POS.x, y: RETURN_PORTAL_POS.y, label: '回到廣場' },
       // 場景正中間：戶外泳池入口（藍色 hue）。進入前會跑 ROOM_ENTRY_CHECKS.swim_race 的會員檢查
-      { to: 'swim_race', label: '🏊 線上多人競泳', x: 50, y: 55, spawn: [50, 70], hue: 170 }
+      { to: 'swim_race', label: '🏊 線上多人競泳', x: 50, y: 55, spawn: [50, 70], hue: 170 },
+      // 線上多人競泳右邊：Project Starforge 入口（橘色 hue）。這是「外部連結傳送點」：
+      // 帶 link 的傳送點不是房間，前端走到之後直接把整頁換到對應網址（見 index.asp 的 PORTAL_LINKS），
+      // 不會送 teleport；to 只用來當唯一識別，用 'link:' 開頭避免跟房間 id 撞名。
+      { to: 'link:starforge', link: 'starforge', label: '🚀 Starforge 星球工業', x: 65, y: 55, hue: 30 }
     ]
   },
   // 線上多人競泳（戶外泳池）：多人小遊戲之後在這裡開發，目前是準備區。
