@@ -13,7 +13,7 @@ module.exports = function createAspApi(baseUrl, apiKey) {
       const q = new URLSearchParams(Object.assign({ key: apiKey }, params)).toString();
       const u = new URL(method === 'GET' ? baseUrl + (baseUrl.includes('?') ? '&' : '?') + q : baseUrl);
       const lib = u.protocol === 'http:' ? http : https;
-      const opts = { method, hostname: u.hostname, port: u.port || undefined, path: u.pathname + u.search, timeout: 10000, headers: {} };
+      const opts = { method, hostname: u.hostname, port: u.port || undefined, path: u.pathname + u.search, timeout: 15000, headers: {} };
       if (method === 'POST') {
         opts.headers['Content-Type'] = 'application/x-www-form-urlencoded';
         opts.headers['Content-Length'] = Buffer.byteLength(q);
@@ -36,7 +36,13 @@ module.exports = function createAspApi(baseUrl, apiKey) {
   return {
     world: () => request('GET', { act: 'world' }),
     player: (memberId) => request('GET', { act: 'player', memberId }),
+    nodes: () => request('GET', { act: 'nodes' }),
     plant: (teamId, charId, x, y) => request('POST', { act: 'plant', teamId, charId, x: x.toFixed(2), y: y.toFixed(2) }),
-    savePos: (charId, x, y) => request('POST', { act: 'savepos', charId, x: x.toFixed(2), y: y.toFixed(2) })
+    savePos: (charId, x, y) => request('POST', { act: 'savepos', charId, x: x.toFixed(2), y: y.toFixed(2) }),
+    // inventory = { wood: 12, stone: 3 }
+    saveInv: (charId, inventory) => request('POST', { act: 'saveinv', charId,
+      items: Object.keys(inventory).filter((k) => inventory[k] > 0).map((k) => k + ':' + inventory[k]).join(',') }),
+    // list = [[id, amount, changedMs], ...]
+    saveNodes: (list) => request('POST', { act: 'savenodes', nodes: list.map((n) => n.join(':')).join(';') })
   };
 };
