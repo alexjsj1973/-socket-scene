@@ -2288,7 +2288,11 @@ io.on('connection', (socket) => {
 // 跟社群平台的連線、房間、事件完全分開；沿用這裡的 token 驗證與 API Key，
 // 另外可用環境變數 STARFORGE_API_URL / STARFORGE_API_KEY 覆寫。
 // ---------------------------------------------------------------
-require('./starforge/server')({ io, app, verifyLoginToken, verifyTokenUrl: VERIFY_TOKEN_URL, apiKey: VERIFY_API_KEY });
+try {
+  require('./starforge/server')({ io, app, verifyLoginToken, verifyTokenUrl: VERIFY_TOKEN_URL, apiKey: VERIFY_API_KEY });
+} catch (err) {
+  console.warn('[starforge] 遊戲服務沒有啟動（社群平台不受影響）：' + err.message);
+}
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
