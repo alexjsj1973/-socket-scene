@@ -2282,6 +2282,14 @@ io.on('connection', (socket) => {
   });
 });
 
+// ---------------------------------------------------------------
+// Project Starforge 遊戲服務：掛在同一個服務的 Socket.io namespace「/starforge」，
+// 程式在 starforge/server/（部署時要把整個 starforge/server 資料夾一起放進這個 repo）。
+// 跟社群平台的連線、房間、事件完全分開；沿用這裡的 token 驗證與 API Key，
+// 另外可用環境變數 STARFORGE_API_URL / STARFORGE_API_KEY 覆寫。
+// ---------------------------------------------------------------
+require('./starforge/server')({ io, app, verifyLoginToken, verifyTokenUrl: VERIFY_TOKEN_URL, apiKey: VERIFY_API_KEY });
+
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
   console.log(`✅ 伺服器已啟動： http://localhost:${PORT}`);
