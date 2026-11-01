@@ -127,8 +127,13 @@
     }
     if (build < total * 0.5) return { ok: false, error: '這裡可以蓋東西的地太少（至少要一半是平原或丘陵）', blocks };
     if (water < 6) return { ok: false, error: '初始領地裡沒有水源，請選靠近河流或湖泊的位置', blocks };
+    // 額外檢查（例如資源模組的「領地內要有樹和石頭」），由呼叫端傳入
+    if (typeof opts.extraCheck === 'function') {
+      const err = opts.extraCheck(blocks);
+      if (err) return { ok: false, error: err, blocks };
+    }
     return { ok: true, blocks };
   }
 
-  return { CHUNK, T, LEVEL, create, initialTerritory, checkFlagSite };
+  return { CHUNK, T, LEVEL, create, initialTerritory, checkFlagSite, fbm, hash2 };
 });
