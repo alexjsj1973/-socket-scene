@@ -16,6 +16,7 @@
 //     管理員隨時改數量 / 範圍 / 按「重置所有資源」，這裡每 30 秒向 game_api.asp 確認一次，有變就同步並通知所有玩家
 //     （調高 = 隱藏的放回原位、不夠再長新的；調低 = 編號大的先隱藏；改範圍只影響新長的；重置 = 換一個 epoch 全部重來）
 //   * 採集：只能採自己隊伍領地內的；伺服器檢查距離、冷卻、剩餘量、背包容量。背包與資源每 30 秒批次寫回資料庫
+//   * 換造型：玩家隨時可以從 40 種造型（look.char = c01～c40）換一個；白名單由 game_api.asp（inc_sf_character.asp）檢查並存檔，成功後廣播給所有人
 //   * 背包：可以放棄（直接消失）或丟在地上；地上的物品任何人都能撿，10 分鐘沒人撿就消失（只放記憶體，重啟會清空）
 // 狀態只放在記憶體（Render 重啟會清空），需要保留的（旗子、位置）都寫進資料庫，
 // 啟動或場次切換時從資料庫重新載入（GDD 34.3）。
@@ -33,6 +34,7 @@ const FLUSH_EVERY_MS = 30 * 1000;    // 背包、資源節點批次存檔間隔
 const DROP_TTL_MS = 10 * 60 * 1000;  // 地上的物品多久沒人撿就消失
 const DROP_MAX = 500;                // 整個世界最多同時有幾堆地上物品
 const ITEM_OP_GAP_MS = 200;          // 丟棄 / 丟地上 / 撿起的最短間隔（防連點洗訊息）
+const LOOK_GAP_MS = 1500;            // 換造型的最短間隔
 
 module.exports = function attachStarforge(opts) {
   const { io, app, verifyLoginToken } = opts;
@@ -279,7 +281,7 @@ module.exports = function attachStarforge(opts) {
         const p = {
           socketId: socket.id, memberId: v.memberId, charId: c.id, name: c.name, look: c.look, level: c.level,
           teamId: team.id, x: pos.x, y: pos.y, tx: null, ty: null, dir: 0, lastSave: Date.now(),
-          inventory: {}, invDirty: false, lastGather: 0, lastItemOp: 0
+          inventory: {}, invDirty: false, lastGather: 0, lastItemOp: 0, lastLook: 0
         };
         (pr.inventory || []).forEach((it) => { if (SfResources.ITEMS[it.code]) p.inventory[it.code] = it.qty; });
         players.set(socket.id, p);
@@ -435,6 +437,22 @@ module.exports = function attachStarforge(opts) {
       if (d.qty <= 0) { world.drops.delete(d.id); nsp.emit('drop-removed', { id: d.id }); }
       else nsp.emit('drop-changed', [d.id, d.qty]);      // 背包裝不下的留在地上
       socket.emit('picked', { dropId: d.id, item: d.item, gained: take, qty: p.inventory[d.item], x: d.x, y: d.y });
+    });
+
+    // ---- 換造型：先粗檢格式，白名單交給 ASP（與大廳同一份），存成功才廣播 ----
+    socket.on('set-look', async (data) => {
+      const p = players.get(socket.id);
+      if (!p || !world || !data || typeof data !== 'object') return;
+      const now = Date.now();
+      if (now - p.lastLook < LOOK_GAP_MS) return socket.emit('look-error', { error: '換太快了，等一下再試' });
+      const look = { char: String(data.char || '') };
+      if (!/^c\d{2}$/.test(look.char)) return socket.emit('look-error', { error: '造型選項不正確' });
+      p.lastLook = now;
+      const r = await api.saveLook(p.charId, look);
+      if (!r.ok) return socket.emit('look-error', { error: r.error || '存檔失敗，請稍後再試' });
+      if (!players.has(socket.id)) return;
+      p.look = r.look || look;
+      nsp.emit('char-look', { id: p.charId, look: p.look });
     });
 
     socket.on('disconnect', () => {
