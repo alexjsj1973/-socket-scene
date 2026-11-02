@@ -42,7 +42,8 @@ module.exports = function createAspApi(baseUrl, apiKey) {
     // inventory = { wood: 12, stone: 3 }
     saveInv: (charId, inventory) => request('POST', { act: 'saveinv', charId,
       items: Object.keys(inventory).filter((k) => inventory[k] > 0).map((k) => k + ':' + inventory[k]).join(',') }),
-    // list = [[id, amount, changedMs], ...]
-    saveNodes: (list) => request('POST', { act: 'savenodes', nodes: list.map((n) => n.join(':')).join(';') })
+    // nodes = [{ id, teamId, type, x, y, max, amount, t, active }, ...]；epoch = 目前的資源 epoch（管理員重置後，舊的那批會被拒絕）
+    saveNodes: (nodes, epoch) => request('POST', { act: 'savenodes', epoch,
+      nodes: nodes.map((n) => [n.id, n.teamId, n.type, n.x, n.y, n.max, n.amount, n.t, n.active ? 1 : 0].join(':')).join(';') })
   };
 };
