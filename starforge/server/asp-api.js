@@ -39,6 +39,8 @@ module.exports = function createAspApi(baseUrl, apiKey) {
     nodes: () => request('GET', { act: 'nodes' }),
     plant: (teamId, charId, x, y) => request('POST', { act: 'plant', teamId, charId, x: x.toFixed(2), y: y.toFixed(2) }),
     savePos: (charId, x, y) => request('POST', { act: 'savepos', charId, x: x.toFixed(2), y: y.toFixed(2) }),
+    // 換造型：look = { char: 'c07' }；白名單由 ASP 檢查，成功回 { ok, look }
+    saveLook: (charId, look) => request('POST', { act: 'savelook', charId, char: look.char }),
     // inventory = { wood: 12, stone: 3 }
     saveInv: (charId, inventory) => request('POST', { act: 'saveinv', charId,
       items: Object.keys(inventory).filter((k) => inventory[k] > 0).map((k) => k + ':' + inventory[k]).join(',') }),
