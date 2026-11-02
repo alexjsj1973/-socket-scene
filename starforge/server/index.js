@@ -259,6 +259,8 @@ module.exports = function attachStarforge(opts) {
       p.dir = dirOf(node.x - p.x, node.y - p.y);
       socket.emit('gathered', { nodeId: node.id, item, qty: p.inventory[item], left: next.amount });
       nsp.emit('node-changed', nodeRow(node.id, next));
+      // 給其他人播採集動畫（揮工具、資源晃動）：[角色, 節點, 面向]；轉向也一起帶過去（站著不動時 positions 不會廣播）
+      socket.broadcast.emit('char-gathering', [p.charId, node.id, p.dir]);
     });
 
     socket.on('disconnect', () => {
