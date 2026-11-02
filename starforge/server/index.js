@@ -12,7 +12,8 @@
 //   * 移動：前端送目的地，伺服器檢查可走、每 100ms 依速度移動、廣播位置（伺服器是唯一真相）
 //   * 插旗：只有隊長、隊伍還沒插旗；伺服器檢查地形、間距、水源，再寫入資料庫，廣播給所有人
 //   * 位置存檔：離線時、以及每 2 分鐘寫回資料庫；重新進場從上次位置出現
-//   * 採集：資源節點位置由 seed 決定（resources.js），只能採自己隊伍領地內的；
+//   * 採集：隊伍插旗後，依後台的「資源分佈」在該隊領地裡生成資源（resources.js，位置由 seed + 隊伍 + 旗子決定），
+//     只能採自己隊伍領地內的；每個資源可採數量依設定的範圍抽；
 //     伺服器檢查距離、冷卻、剩餘量、背包容量。背包與被採過的節點每 30 秒批次寫回資料庫
 // 狀態只放在記憶體（Render 重啟會清空），需要保留的（旗子、位置）都寫進資料庫，
 // 啟動或場次切換時從資料庫重新載入（GDD 34.3）。
@@ -58,7 +59,15 @@ module.exports = function attachStarforge(opts) {
     if (!nr.ok) throw new Error(nr.error || '讀取資源節點失敗');
     const nodes = new Map();
     (nr.nodes || []).forEach(([id, amount, t]) => nodes.set(id, { amount, t: Number(t) }));
-    return { session: r.session, terrain: SfTerrain.create(r.session.seed, r.session.mapChunks), teams, nodes, dirtyNodes: new Set() };
+    const w = { session: r.session, terrain: SfTerrain.create(r.session.seed, r.session.mapChunks), teams, nodes, dirtyNodes: new Set() };
+    // 已插旗的隊伍：生成領地裡的資源（session.resources = 後台設定的資源分佈；舊版 game_api.asp 沒有就用預設）
+    for (const t of teams.values()) registerTeamNodes(w, t);
+    return w;
+  }
+  function registerTeamNodes(w, team) {
+    if (!w || !team || team.flagX == null) return;
+    const blocks = SfTerrain.initialTerritory(team.flagX, team.flagY, w.session.initialBlocks, w.session.mapChunks);
+    SfResources.registerTeam(w.terrain, team, blocks, w.session.resources);
   }
   async function ensureWorld(expectSessionId) {
     if (world && (!expectSessionId || world.session.id === expectSessionId)) return world;
@@ -100,7 +109,7 @@ module.exports = function attachStarforge(opts) {
   // 隊伍目前的領地（第一版：插旗位置的初始領地；擴張之後再加）
   const teamBlocks = (team) => (team && team.flagX != null)
     ? SfTerrain.initialTerritory(team.flagX, team.flagY, world.session.initialBlocks, world.session.mapChunks) : [];
-  const resourceCheck = (blocks) => SfResources.territoryResourceError(world.terrain, blocks);
+  const resourceCheck = (blocks) => SfResources.territoryResourceError(world.terrain, blocks, world.session.resources);
 
   // 8 方向：0 朝下、2 朝右、4 朝上、6 朝左（與 sf-sprite.js 相同）
   const dirOf = (dx, dy) => ((Math.round(Math.atan2(dx, dy) / (Math.PI / 4)) % 8) + 8) % 8;
@@ -152,7 +161,7 @@ module.exports = function attachStarforge(opts) {
         let team = w.teams.get(pr.team.id);
         if (!team) {
           const fresh = await api.world();
-          if (fresh.ok) (fresh.teams || []).forEach((t) => w.teams.set(t.id, t));
+          if (fresh.ok) (fresh.teams || []).forEach((t) => { w.teams.set(t.id, t); registerTeamNodes(w, t); });
           team = w.teams.get(pr.team.id) || { id: pr.team.id, name: pr.team.name, level: 1, flagX: null, flagY: null, leaderId: pr.team.leaderId };
           w.teams.set(team.id, team);
         }
@@ -179,7 +188,8 @@ module.exports = function attachStarforge(opts) {
         socket.emit('init', {
           me: { id: c.id, name: c.name, level: c.level, teamId: team.id, isLeader: team.leaderId === c.id },
           world: { id: s.id, name: s.name, seed: s.seed, mapChunks: s.mapChunks, chunk: SfTerrain.CHUNK,
-                   initialBlocks: s.initialBlocks, minFlagDistance: s.minFlagDistance, teamSizeMax: s.teamSizeMax },
+                   initialBlocks: s.initialBlocks, minFlagDistance: s.minFlagDistance, teamSizeMax: s.teamSizeMax,
+                   resources: s.resources || null },   // 資源分佈：前端用同一份 resources.js 算出一樣的資源位置
           players: Array.from(players.values()).map(publicPlayer),
           teams: Array.from(w.teams.values()).map(publicTeam),
           // 資源：被採過的節點、伺服器時間（前端算再生用）、再生倍率、自己的背包
@@ -226,6 +236,7 @@ module.exports = function attachStarforge(opts) {
         const r = await api.plant(team.id, p.charId, x, y);
         if (!r.ok) return socket.emit('flag-error', { error: r.error || '插旗失敗' });
         team.flagX = x; team.flagY = y;
+        registerTeamNodes(world, team);   // 領地裡長出資源
         nsp.emit('flag-planted', publicTeam(team));
       }).catch((e) => console.error('[starforge] 插旗失敗', e));
     });
