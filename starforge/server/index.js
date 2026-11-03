@@ -18,6 +18,8 @@
 //   * 採集：只能採自己隊伍領地內的；伺服器檢查距離、冷卻、剩餘量、背包容量。背包與資源每 30 秒批次寫回資料庫
 //   * 換造型：玩家隨時可以從 40 種造型（look.char = c01～c40）換一個；白名單由 game_api.asp（inc_sf_character.asp）檢查並存檔，成功後廣播給所有人
 //   * 背包：可以放棄（直接消失）或丟在地上；地上的物品任何人都能撿，10 分鐘沒人撿就消失（只放記憶體，重啟會清空）
+//   * 聊天：跟社群平台集會廣場同一套玩法（對話紀錄 + 頭上泡泡 + 進出世界的系統訊息），分「全體」與「隊伍」兩個頻道；
+//     紀錄只放記憶體（各留最近 CHAT_LOG_MAX 則），換場次或重啟就清空；隊伍頻道只送給同隊（Socket.io room team:<隊伍編號>）
 // 狀態只放在記憶體（Render 重啟會清空），需要保留的（旗子、位置）都寫進資料庫，
 // 啟動或場次切換時從資料庫重新載入（GDD 34.3）。
 // ============================================================
@@ -35,6 +37,9 @@ const DROP_TTL_MS = 10 * 60 * 1000;  // 地上的物品多久沒人撿就消失
 const DROP_MAX = 500;                // 整個世界最多同時有幾堆地上物品
 const ITEM_OP_GAP_MS = 200;          // 丟棄 / 丟地上 / 撿起的最短間隔（防連點洗訊息）
 const LOOK_GAP_MS = 1500;            // 換造型的最短間隔
+const CHAT_MAX_LEN = 100;            // 一則聊天最多幾個字（與前端輸入框 maxlength 一致）
+const CHAT_GAP_MS = 700;             // 同一人兩則聊天的最短間隔（防洗版）
+const CHAT_LOG_MAX = 60;             // 全體頻道、每個隊伍頻道各保留幾則（新進場的人看得到最近的對話）
 
 module.exports = function attachStarforge(opts) {
   const { io, app, verifyLoginToken } = opts;
@@ -69,7 +74,8 @@ module.exports = function attachStarforge(opts) {
     const nr = await api.nodes();
     if (!nr.ok) throw new Error(nr.error || '讀取資源節點失敗');
     const w = { session: r.session, terrain: SfTerrain.create(r.session.seed, r.session.mapChunks), teams,
-                nodes: new Map(), dirtyNodes: new Set(), teamSpots: new Map(), drops: new Map(), dropSeq: 0 };
+                nodes: new Map(), dirtyNodes: new Set(), teamSpots: new Map(), drops: new Map(), dropSeq: 0,
+                chat: { world: [], teams: new Map() } };   // 聊天紀錄跟著場次走：換場次就是新的世界、新的對話
     (nr.nodes || []).forEach((row) => { const n = nodeFromDb(row); if (n) w.nodes.set(n.id, n); });
     // 已插旗的隊伍：數量跟設定不一樣就補上 / 隱藏（例如伺服器停機時管理員改過設定）
     for (const t of teams.values()) syncTeamNodes(w, t);
@@ -205,6 +211,29 @@ module.exports = function attachStarforge(opts) {
   const nodeRow = (n) => [n.id, n.type, n.x, n.y, n.max, n.amount, n.t];
   const activeNodeRows = (w) => { const out = []; for (const n of w.nodes.values()) if (n.active) out.push(nodeRow(n)); return out; };
   const dropRow = (d) => [d.id, d.item, d.qty, d.x, d.y];
+
+  // ---- 聊天 ----
+  // 訊息格式（送給前端）：{ channel: 'world' | 'team', who, charId, teamId, text, isSystem, ts }
+  // 全體頻道 nsp.emit；隊伍頻道 nsp.to('team:<id>')。前端收到非系統訊息時，同時在說話者頭上顯示泡泡。
+  function teamLog(w, teamId) {
+    if (!w.chat.teams.has(teamId)) w.chat.teams.set(teamId, []);
+    return w.chat.teams.get(teamId);
+  }
+  function pushLog(list, msg) { list.push(msg); if (list.length > CHAT_LOG_MAX) list.shift(); }
+  function sendChat(msg) {
+    if (!world) return;
+    if (msg.channel === 'team') { pushLog(teamLog(world, msg.teamId), msg); nsp.to('team:' + msg.teamId).emit('chat-message', msg); }
+    else { pushLog(world.chat.world, msg); nsp.emit('chat-message', msg); }
+  }
+  const systemChat = (text) => sendChat({ channel: 'world', who: '系統', charId: null, teamId: null, text, isSystem: true, ts: Date.now() });
+  // 進場時給的對話紀錄：全體 + 自己隊伍，依時間排好
+  function chatLogFor(w, teamId) {
+    return w.chat.world.concat(teamLog(w, teamId)).sort((a, b) => a.ts - b.ts).slice(-CHAT_LOG_MAX);
+  }
+  // 清掉控制字元與前後空白、限制長度（顯示時前端一律當純文字）
+  function cleanChatText(v) {
+    return String(v == null ? '' : v).replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028-\u202e\u2066-\u2069]/g, '').trim().slice(0, CHAT_MAX_LEN);
+  }
   // 隊伍目前的領地（第一版：插旗位置的初始領地；擴張之後再加）
   const teamBlocks = (team) => (team && team.flagX != null)
     ? SfTerrain.initialTerritory(team.flagX, team.flagY, world.session.initialBlocks, world.session.mapChunks) : [];
@@ -286,6 +315,7 @@ module.exports = function attachStarforge(opts) {
         (pr.inventory || []).forEach((it) => { if (SfResources.ITEMS[it.code]) p.inventory[it.code] = it.qty; });
         players.set(socket.id, p);
         socket.data.charId = c.id;
+        socket.join('team:' + team.id);           // 隊伍頻道聊天用
 
         const s = w.session;
         socket.emit('init', {
@@ -300,9 +330,11 @@ module.exports = function attachStarforge(opts) {
           drops: Array.from(w.drops.values()).map(dropRow),
           serverNow: Date.now(),
           regenMultiplier: regenMult(),
-          inventory: p.inventory
+          inventory: p.inventory,
+          chatLog: chatLogFor(w, team.id)          // 最近的對話（全體 + 自己隊伍）
         });
         socket.broadcast.emit('char-joined', publicPlayer(p));
+        systemChat(p.name + ' 進入了世界');
       } catch (e) {
         console.error('[starforge] join 失敗', e);
         socket.emit('join-error', { error: '進入世界失敗：' + e.message });
@@ -455,6 +487,19 @@ module.exports = function attachStarforge(opts) {
       nsp.emit('char-look', { id: p.charId, look: p.look });
     });
 
+    // ---- 聊天：只收文字與頻道，說話的人、隊伍、時間都由伺服器決定 ----
+    socket.on('chat', (data) => {
+      const p = players.get(socket.id);
+      if (!p || !world || !data || typeof data !== 'object') return;
+      const text = cleanChatText(data.text);
+      if (!text) return;
+      const now = Date.now();
+      if (now - (p.lastChat || 0) < CHAT_GAP_MS) return socket.emit('chat-error', { error: '說太快了，休息一下再說' });
+      p.lastChat = now;
+      const channel = data.channel === 'team' ? 'team' : 'world';
+      sendChat({ channel, who: p.name, charId: p.charId, teamId: p.teamId, text, isSystem: false, ts: now });
+    });
+
     socket.on('disconnect', () => {
       const p = players.get(socket.id);
       if (!p) return;
@@ -462,6 +507,8 @@ module.exports = function attachStarforge(opts) {
       savePos(p);
       saveInv(p);
       nsp.emit('char-left', { id: p.charId });
+      // 被同角色的新連線踢掉時 players 已經先刪掉了，不會走到這裡，所以不會多一則「離開」
+      systemChat(p.name + ' 離開了世界');
     });
   });
 
