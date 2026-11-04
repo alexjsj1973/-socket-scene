@@ -18,6 +18,8 @@
 //   * 採集：只能採自己隊伍領地內的；伺服器檢查距離、冷卻、剩餘量、背包容量。背包與資源每 30 秒批次寫回資料庫
 //     採光的資源會「搬家」：原位置消失，在同隊領地裡另找一個空位重新長出來，剩餘量從 0 開始慢慢長到可採數量上限
 //     （可採數量用現在的資源分佈設定重新抽；同一筆資料、同一個代碼，只是換位置，所以資料庫不用改）
+//   * 資源擋路：所有可採的東西（領地裡的資源節點 + 野外的樹、礦、花）都有圓形佔地，玩家走不進去；
+//     移動時撞到會沿邊緣繞過去，繞不過去（3 秒沒有更接近目的地）就停下。野外資源由 wild.js 依 seed 算出（與瀏覽器同一份）
 //   * 換造型：玩家隨時可以從 40 種造型（look.char = c01～c40）換一個；白名單由 game_api.asp（inc_sf_character.asp）檢查並存檔，成功後廣播給所有人
 //   * 背包：可以放棄（直接消失）或丟在地上；地上的物品任何人都能撿，10 分鐘沒人撿就消失（只放記憶體，重啟會清空）
 //   * 聊天：跟社群平台集會廣場同一套玩法（對話紀錄 + 頭上泡泡 + 進出世界的系統訊息），分「全體」與「隊伍」兩個頻道；
@@ -28,6 +30,7 @@
 const path = require('path');
 const SfTerrain = require('./terrain');
 const SfResources = require('./resources');
+const SfWild = require('./wild');
 const createAspApi = require('./asp-api');
 
 const TICK_MS = 100;                 // 伺服器移動模擬間隔
@@ -51,7 +54,7 @@ module.exports = function attachStarforge(opts) {
   const nsp = io.of('/starforge');
 
   // 瀏覽器用的地形程式（與伺服器同一份）
-  ['terrain.js', 'resources.js'].forEach((f) => {
+  ['terrain.js', 'resources.js', 'wild.js'].forEach((f) => {
     app.get('/starforge/' + f, (req, res) => {
       res.set('Cache-Control', 'public, max-age=300');
       res.sendFile(path.join(__dirname, f));
@@ -77,7 +80,9 @@ module.exports = function attachStarforge(opts) {
     if (!nr.ok) throw new Error(nr.error || '讀取資源節點失敗');
     const w = { session: r.session, terrain: SfTerrain.create(r.session.seed, r.session.mapChunks), teams,
                 nodes: new Map(), dirtyNodes: new Set(), teamSpots: new Map(), drops: new Map(), dropSeq: 0,
-                chat: { world: [], teams: new Map() } };   // 聊天紀錄跟著場次走：換場次就是新的世界、新的對話
+                chat: { world: [], teams: new Map() },     // 聊天紀錄跟著場次走：換場次就是新的世界、新的對話
+                wild: null, nodeVer: 0, grid: null, gridVer: -1, terrKey: '', terrSet: new Set() };   // 資源擋路用（見 obstacleAt）
+    w.wild = SfWild.create(w.terrain);
     (nr.nodes || []).forEach((row) => { const n = nodeFromDb(row); if (n) w.nodes.set(n.id, n); });
     // 已插旗的隊伍：數量跟設定不一樣就補上 / 隱藏（例如伺服器停機時管理員改過設定）
     for (const t of teams.values()) syncTeamNodes(w, t);
@@ -123,6 +128,7 @@ module.exports = function attachStarforge(opts) {
     const spot = SfResources.findSpot({ plains: rot(sp.plains), hills: rot(sp.hills) }, occupied, n.type);
     if (!spot) return false;
     n.x = spot[0] + 0.5; n.y = spot[1] + 0.5;
+    w.nodeVer++;
     return true;
   }
   function syncTeamNodes(w, team) {
@@ -157,6 +163,7 @@ module.exports = function attachStarforge(opts) {
       }
     }
     changed.forEach((n) => w.dirtyNodes.add(n.id));
+    if (changed.length) w.nodeVer++;
     return changed;
   }
   async function ensureWorld(expectSessionId) {
@@ -201,7 +208,7 @@ module.exports = function attachStarforge(opts) {
     w.session = s;
     if ((s.resourceEpoch || 0) !== (old.resourceEpoch || 0)) {
       // 後台已經刪掉舊的資源資料；這裡清掉記憶體（還沒存的也不要了）重新生成
-      w.nodes.clear(); w.dirtyNodes.clear(); w.teamSpots.clear();
+      w.nodes.clear(); w.dirtyNodes.clear(); w.teamSpots.clear(); w.nodeVer++;
       for (const t of w.teams.values()) syncTeamNodes(w, t);
       nsp.emit('nodes-reset', { rows: activeNodeRows(w), resources: s.resources || null, regenMultiplier: s.regenMultiplier });
       flushNodes();
@@ -232,6 +239,41 @@ module.exports = function attachStarforge(opts) {
   const nodeRow = (n) => [n.id, n.type, n.x, n.y, n.max, n.amount, n.t];
   const activeNodeRows = (w) => { const out = []; for (const n of w.nodes.values()) if (n.active) out.push(nodeRow(n)); return out; };
   const dropRow = (d) => [d.id, d.item, d.qty, d.x, d.y];
+
+  // ---- 資源擋路 ----
+  // 資源節點依區塊建索引（資源有新增 / 搬家 / 隱藏時 nodeVer + 1，下次查詢才重建）
+  function nodesNearFn(w) {
+    if (w.gridVer !== w.nodeVer || !w.grid) {
+      w.grid = new Map(); w.gridVer = w.nodeVer;
+      for (const n of w.nodes.values()) {
+        if (!n.active) continue;
+        const k = Math.floor(n.x / SfTerrain.CHUNK) + ',' + Math.floor(n.y / SfTerrain.CHUNK);
+        if (!w.grid.has(k)) w.grid.set(k, []);
+        w.grid.get(k).push(n);
+      }
+    }
+    return (x, y) => {
+      const cx = Math.floor(x / SfTerrain.CHUNK), cy = Math.floor(y / SfTerrain.CHUNK), out = [];
+      for (let yy = cy - 1; yy <= cy + 1; yy++) for (let xx = cx - 1; xx <= cx + 1; xx++) { const l = w.grid.get(xx + ',' + yy); if (l) out.push(...l); }
+      return out;
+    };
+  }
+  // 所有已插旗隊伍的領地區塊（野外資源不放在領地裡）
+  function territorySet(w) {
+    const key = Array.from(w.teams.values()).map((t) => t.id + ':' + t.flagX + ',' + t.flagY).join('|');
+    if (key !== w.terrKey) {
+      w.terrKey = key; w.terrSet = new Set();
+      for (const t of w.teams.values()) if (t.flagX != null) {
+        SfTerrain.initialTerritory(t.flagX, t.flagY, w.session.initialBlocks, w.session.mapChunks).forEach((b) => w.terrSet.add(b.cx + ',' + b.cy));
+      }
+    }
+    return w.terrSet;
+  }
+  // (x, y) 被哪個資源擋住（沒有回 null）
+  function obstacleFn(w) {
+    const near = nodesNearFn(w), terr = territorySet(w);
+    return (x, y) => w.wild.obstacleAt(x, y, terr, near);
+  }
 
   // ---- 聊天 ----
   // 訊息格式（送給前端）：{ channel: 'world' | 'team', who, charId, teamId, text, isSystem, ts }
@@ -372,7 +414,15 @@ module.exports = function attachStarforge(opts) {
       x = Math.max(0.5, Math.min(size - 0.5, x));
       y = Math.max(0.5, Math.min(size - 0.5, y));
       if (!world.terrain.walkable(x, y)) return socket.emit('move-error', { error: '那裡過不去（水面或高山）' });
-      p.tx = x; p.ty = y;
+      // 目的地在資源上：改成走到那個資源的邊緣（從自己這一側靠近）
+      const o = obstacleFn(world)(x, y);
+      if (o) {
+        let vx = p.x - o.x, vy = p.y - o.y, vd = Math.hypot(vx, vy);
+        if (vd < 0.01) { vx = 0; vy = 1; vd = 1; }
+        x = o.x + vx / vd * (o.r + 0.05); y = o.y + vy / vd * (o.r + 0.05);
+        if (!world.terrain.walkable(x, y)) return socket.emit('move-error', { error: '那裡被擋住了' });
+      }
+      p.tx = x; p.ty = y; p.best = Math.hypot(x - p.x, y - p.y); p.stuck = 0;
     });
 
     // ---- 插旗 ----
@@ -559,15 +609,19 @@ module.exports = function attachStarforge(opts) {
     const step = SPEED * TICK_MS / 1000;
     const moved = [];
     const now = Date.now();
+    const w = world, hit = obstacleFn(w), ok = (x, y) => w.terrain.walkable(x, y);
     for (const p of players.values()) {
       if (p.tx != null) {
         const dx = p.tx - p.x, dy = p.ty - p.y, d = Math.hypot(dx, dy);
-        let nx, ny;
-        if (d <= step) { nx = p.tx; ny = p.ty; } else { nx = p.x + dx / d * step; ny = p.y + dy / d * step; }
-        if (world.terrain.walkable(nx, ny)) {
-          p.dir = dirOf(dx, dy);
-          p.x = nx; p.y = ny;
-          if (d <= step) { p.tx = null; p.ty = null; }
+        // 往目的地走一步；撞到資源沿邊緣繞，撞到水 / 山或繞不過去就停
+        const r = d < 1e-3 ? null : SfWild.stepAround(p.x, p.y, p.tx, p.ty, step, ok, hit);
+        if (r) {
+          p.dir = dirOf(r[0] - p.x, r[1] - p.y);
+          p.x = r[0]; p.y = r[1];
+          const left = Math.hypot(p.tx - p.x, p.ty - p.y);
+          // 3 秒（30 步）都沒有比之前更接近目的地 → 繞不過去，停下
+          if (left < (p.best == null ? Infinity : p.best) - 0.05) { p.best = left; p.stuck = 0; } else p.stuck = (p.stuck || 0) + 1;
+          if (left < 0.02 || p.stuck > 30) { p.tx = null; p.ty = null; }
         } else { p.tx = null; p.ty = null; }
         moved.push([p.charId, +p.x.toFixed(2), +p.y.toFixed(2), p.dir, p.tx != null ? 1 : 0]);
       }
