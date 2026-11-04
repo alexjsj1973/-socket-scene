@@ -55,21 +55,22 @@
     gold:     { item: 'gold_ore',     name: '金礦', terrain: 'hill',  regenSec: 600 },
     flower:   { item: 'flower',       name: '花朵', terrain: 'plain', regenSec: 90 }    // 51 種花的外觀由前端依位置挑
   };
-  // 預設分佈（每隊領地）：count 個數、min～max 每個資源可採集的數量
+  // 預設分佈（每隊領地）：count 個數、min～max 每個資源可採集的數量；wild = 野外每個區塊大約幾個（只能看、不能採）
+  //   再生秒數的預設值是 NODE_TYPES 的 regenSec。後台可以改這些值（每個場次、每一版設定各自存），沒設定就用這裡的預設。
   // 與 inc/inc_sf_settings.asp 的 SF_RESOURCES 預設值一致，改一邊就要改另一邊
   const DEFAULT_SPAWN = {
-    tree:     { count: 30, min: 10, max: 20 },
-    rock:     { count: 30, min: 10, max: 20 },
-    iron:     { count: 15, min: 8,  max: 15 },
-    copper:   { count: 10, min: 8,  max: 15 },
-    coal:     { count: 10, min: 8,  max: 15 },
-    aluminum: { count: 10, min: 6,  max: 12 },
-    silver:   { count: 3,  min: 3,  max: 6 },
-    gold:     { count: 2,  min: 2,  max: 4 },
-    flower:   { count: 20, min: 3,  max: 8 }
+    tree:     { count: 30, min: 10, max: 20, wild: 24 },
+    rock:     { count: 30, min: 10, max: 20, wild: 1.7 },
+    iron:     { count: 15, min: 8,  max: 15, wild: 0.8 },
+    copper:   { count: 10, min: 8,  max: 15, wild: 0.65 },
+    coal:     { count: 10, min: 8,  max: 15, wild: 0.8 },
+    aluminum: { count: 10, min: 6,  max: 12, wild: 0.5 },
+    silver:   { count: 3,  min: 3,  max: 6,  wild: 0.35 },
+    gold:     { count: 2,  min: 2,  max: 4,  wild: 0.2 },
+    flower:   { count: 20, min: 3,  max: 8,  wild: 42 }
   };
   // 上下限（與 ASP 驗證、SQL CHECK 一致）
-  const LIMITS = { countMax: 500, totalMax: 1000, amountMax: 999 };
+  const LIMITS = { countMax: 500, totalMax: 1000, amountMax: 999, regenMin: 5, regenMax: 86400, wildMax: 100, speciesMax: 100 };
   const GATHER_RANGE = 1.8;     // 角色離資源多近才能採（格）
   const GATHER_COOLDOWN = 900;  // 每次採集的間隔（毫秒）
   const PICKUP_RANGE = 1.5;     // 角色離地上物品多近才能撿（格）
@@ -80,25 +81,39 @@
 
   // 整理設定：沒給設定 → 全部用預設；有給 → 沒列到的種類（之後才新增的，例如花朵）也用預設；數值夾在合法範圍內
   //   （2026-11-04 改：原本沒列到的當 0，新增花朵後進行中的場次也要長出花，所以改成用預設；不想要就在後台把數量設 0）
+  //   每種：{ count, min, max, regen（每恢復 1 個幾秒）, wild（野外每區塊幾個）, species（品種權重，只有後台有設定的種類才有） }
   function normalizeConfig(cfg) {
     const out = {};
     const int = (v, lo, hi, def) => { v = Math.floor(Number(v)); return Number.isFinite(v) ? Math.max(lo, Math.min(hi, v)) : def; };
+    const dec = (v, lo, hi, def) => { v = Number(v); return v === null || v === undefined || v === '' || !Number.isFinite(v) ? def : Math.max(lo, Math.min(hi, v)); };
     for (const type of Object.keys(NODE_TYPES)) {
-      const d = DEFAULT_SPAWN[type];
+      const d = DEFAULT_SPAWN[type], regenDef = NODE_TYPES[type].regenSec;
       const c = cfg ? cfg[type] : d;
-      if (!c) { out[type] = { count: d.count, min: d.min, max: d.max }; continue; }
+      if (!c) { out[type] = { count: d.count, min: d.min, max: d.max, regen: regenDef, wild: d.wild }; continue; }
       const min = int(c.min, 1, LIMITS.amountMax, d.min);
-      out[type] = { count: int(c.count, 0, LIMITS.countMax, 0), min, max: Math.max(min, int(c.max, 1, LIMITS.amountMax, d.max)) };
+      const o = { count: int(c.count, 0, LIMITS.countMax, 0), min, max: Math.max(min, int(c.max, 1, LIMITS.amountMax, d.max)),
+                  regen: c.regen == null ? regenDef : int(c.regen, LIMITS.regenMin, LIMITS.regenMax, regenDef),
+                  wild: c.wild == null ? d.wild : dec(c.wild, 0, LIMITS.wildMax, d.wild) };
+      // 品種權重：{ oak: 10, ... }，代碼只能是小寫英數（防止奇怪的 key），權重夾在 0～speciesMax
+      if (c.species && typeof c.species === 'object') {
+        o.species = {};
+        for (const k of Object.keys(c.species)) if (/^[a-z0-9_]{1,30}$/.test(k)) o.species[k] = int(c.species[k], 0, LIMITS.speciesMax, 0);
+      }
+      out[type] = o;
     }
     return out;
   }
   const totalCount = (cfg) => Object.keys(cfg).reduce((s, k) => s + cfg[k].count, 0);
+  // 野外密度：{ tree: 24, rock: 1.7, ... }（給 wild.js 用）
+  const wildDensities = (cfg) => { const o = {}; for (const k of Object.keys(cfg)) o[k] = cfg[k].wild; return o; };
 
   // 目前剩餘量：node 要有 max（這個資源的可採數量）、amount（最後變動時的剩餘量）、t（最後變動的毫秒時間）
-  function currentAmount(node, now, regenMult) {
+  //   cfg = normalizeConfig 的結果（有給就用後台設定的再生秒數，沒給用 NODE_TYPES 的預設）
+  function currentAmount(node, now, regenMult, cfg) {
     const def = NODE_TYPES[node.type];
     if (!def) return 0;
-    const interval = def.regenSec * 1000 / Math.max(0.1, regenMult || 1);
+    const sec = (cfg && cfg[node.type] && cfg[node.type].regen) || def.regenSec;
+    const interval = sec * 1000 / Math.max(0.1, regenMult || 1);
     const regen = Math.floor(Math.max(0, now - node.t) / interval);
     return Math.min(node.max, node.amount + regen);
   }
@@ -148,5 +163,5 @@
   }
 
   return { ITEMS, NODE_TYPES, DEFAULT_SPAWN, LIMITS, GATHER_RANGE, GATHER_COOLDOWN, PICKUP_RANGE, STACK_MAX, BAG_KINDS,
-           normalizeConfig, totalCount, currentAmount, landTiles, territoryResourceError, findSpot, inBlocks };
+           normalizeConfig, totalCount, wildDensities, currentAmount, landTiles, territoryResourceError, findSpot, inBlocks };
 });
