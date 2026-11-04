@@ -39,7 +39,8 @@
     coal:         { name: '煤炭',   icon: '⚫' },
     aluminum_ore: { name: '鋁礦石', icon: '🔘' },
     silver_ore:   { name: '銀礦石', icon: '⚪' },
-    gold_ore:     { name: '金礦石', icon: '🟡' }
+    gold_ore:     { name: '金礦石', icon: '🟡' },
+    flower:       { name: '花朵',   icon: '🌸' }      // 2026-11-04 新增
   };
   // 資源種類：產出物品、名稱、喜歡的地形（plain 平原 / hill 丘陵；不夠時會放到另一種）、每恢復 1 單位需要的秒數
   // 代碼只能用小寫英文（會出現在節點代碼裡）；順序 = 後台表格的順序
@@ -51,7 +52,8 @@
     coal:     { item: 'coal',         name: '煤礦', terrain: 'hill',  regenSec: 180 },
     aluminum: { item: 'aluminum_ore', name: '鋁礦', terrain: 'hill',  regenSec: 240 },
     silver:   { item: 'silver_ore',   name: '銀礦', terrain: 'hill',  regenSec: 420 },
-    gold:     { item: 'gold_ore',     name: '金礦', terrain: 'hill',  regenSec: 600 }
+    gold:     { item: 'gold_ore',     name: '金礦', terrain: 'hill',  regenSec: 600 },
+    flower:   { item: 'flower',       name: '花朵', terrain: 'plain', regenSec: 90 }    // 51 種花的外觀由前端依位置挑
   };
   // 預設分佈（每隊領地）：count 個數、min～max 每個資源可採集的數量
   // 與 inc/inc_sf_settings.asp 的 SF_RESOURCES 預設值一致，改一邊就要改另一邊
@@ -63,7 +65,8 @@
     coal:     { count: 10, min: 8,  max: 15 },
     aluminum: { count: 10, min: 6,  max: 12 },
     silver:   { count: 3,  min: 3,  max: 6 },
-    gold:     { count: 2,  min: 2,  max: 4 }
+    gold:     { count: 2,  min: 2,  max: 4 },
+    flower:   { count: 20, min: 3,  max: 8 }
   };
   // 上下限（與 ASP 驗證、SQL CHECK 一致）
   const LIMITS = { countMax: 500, totalMax: 1000, amountMax: 999 };
@@ -75,14 +78,15 @@
   const TILES_PER_NODE = 6;     // 每個資源大約要佔幾格陸地（插旗時檢查領地放不放得下）
   const FLAG_CLEAR = 3;         // 旗子周圍幾格內不放資源（留給基地）
 
-  // 整理設定：沒給設定 → 全部用預設；有給 → 沒列到的種類數量為 0；數值夾在合法範圍內
+  // 整理設定：沒給設定 → 全部用預設；有給 → 沒列到的種類（之後才新增的，例如花朵）也用預設；數值夾在合法範圍內
+  //   （2026-11-04 改：原本沒列到的當 0，新增花朵後進行中的場次也要長出花，所以改成用預設；不想要就在後台把數量設 0）
   function normalizeConfig(cfg) {
     const out = {};
     const int = (v, lo, hi, def) => { v = Math.floor(Number(v)); return Number.isFinite(v) ? Math.max(lo, Math.min(hi, v)) : def; };
     for (const type of Object.keys(NODE_TYPES)) {
       const d = DEFAULT_SPAWN[type];
       const c = cfg ? cfg[type] : d;
-      if (!c) { out[type] = { count: 0, min: d.min, max: d.max }; continue; }
+      if (!c) { out[type] = { count: d.count, min: d.min, max: d.max }; continue; }
       const min = int(c.min, 1, LIMITS.amountMax, d.min);
       out[type] = { count: int(c.count, 0, LIMITS.countMax, 0), min, max: Math.max(min, int(c.max, 1, LIMITS.amountMax, d.max)) };
     }
