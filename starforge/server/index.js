@@ -16,6 +16,8 @@
 //     管理員隨時改數量 / 範圍 / 按「重置所有資源」，這裡每 30 秒向 game_api.asp 確認一次，有變就同步並通知所有玩家
 //     （調高 = 隱藏的放回原位、不夠再長新的；調低 = 編號大的先隱藏；改範圍只影響新長的；重置 = 換一個 epoch 全部重來）
 //   * 採集：只能採自己隊伍領地內的；伺服器檢查距離、冷卻、剩餘量、背包容量。背包與資源每 30 秒批次寫回資料庫
+//     採光的資源會「搬家」：原位置消失，在同隊領地裡另找一個空位重新長出來，剩餘量從 0 開始慢慢長到可採數量上限
+//     （可採數量用現在的資源分佈設定重新抽；同一筆資料、同一個代碼，只是換位置，所以資料庫不用改）
 //   * 換造型：玩家隨時可以從 40 種造型（look.char = c01～c40）換一個；白名單由 game_api.asp（inc_sf_character.asp）檢查並存檔，成功後廣播給所有人
 //   * 背包：可以放棄（直接消失）或丟在地上；地上的物品任何人都能撿，10 分鐘沒人撿就消失（只放記憶體，重啟會清空）
 //   * 聊天：跟社群平台集會廣場同一套玩法（對話紀錄 + 頭上泡泡 + 進出世界的系統訊息），分「全體」與「隊伍」兩個頻道；
@@ -104,6 +106,25 @@ module.exports = function attachStarforge(opts) {
   // 讓某隊領地裡的資源數量符合目前設定；回傳有變動的資源（呼叫端負責廣播）
   //   數量不夠：先把隱藏的（編號小的先）放回原位，還不夠再找空位長新的（可採數量用「現在」的範圍抽）
   //   數量太多：編號大的先隱藏（不刪除，剩餘量保留）
+  // 採光的資源搬到同隊領地裡的另一個空位，剩餘量歸 0（之後依再生速度慢慢長回可採數量上限）
+  //   回傳 true = 搬好了；領地裡找不到空位就留在原地（一樣從 0 長回來）
+  function respawnNode(w, n) {
+    const team = w.teams.get(n.teamId);
+    const cfg = SfResources.normalizeConfig(w.session.resources)[n.type];
+    if (cfg) n.max = cfg.min + Math.floor(Math.random() * (cfg.max - cfg.min + 1));   // 可採數量用現在的設定重新抽
+    n.amount = 0; n.t = Date.now();
+    w.dirtyNodes.add(n.id);
+    if (!team || team.flagX == null) return false;
+    // 被佔用的位置：同隊所有資源（含隱藏的）；原本的位置也算，才不會搬回同一格
+    const occupied = new Set();
+    for (const m of w.nodes.values()) if (m.teamId === n.teamId) occupied.add(Math.floor(m.x) + ',' + Math.floor(m.y));
+    // 空位清單是洗牌過的固定順序，每次從不同位置開始找，資源才會散開，不會老是搬到同一區
+    const sp = teamSpots(w, team), rot = (a) => { const k = Math.floor(Math.random() * (a.length || 1)); return a.slice(k).concat(a.slice(0, k)); };
+    const spot = SfResources.findSpot({ plains: rot(sp.plains), hills: rot(sp.hills) }, occupied, n.type);
+    if (!spot) return false;
+    n.x = spot[0] + 0.5; n.y = spot[1] + 0.5;
+    return true;
+  }
   function syncTeamNodes(w, team) {
     if (!w || !team || team.flagX == null) return [];
     const cfg = SfResources.normalizeConfig(w.session.resources);
@@ -393,7 +414,7 @@ module.exports = function attachStarforge(opts) {
       if (now - p.lastGather < R.GATHER_COOLDOWN - 80) return;   // 太快就忽略（不回錯誤，避免洗訊息）
       const def = R.NODE_TYPES[node.type];
       const amount = R.currentAmount(node, now, regenMult());
-      if (amount <= 0) return socket.emit('gather-error', { error: def.name + '已經採光了，過一陣子會再長回來', stop: true });
+      if (amount <= 0) return socket.emit('gather-error', { error: def.name + '剛長出來，還要一段時間才能採', stop: true });
       const item = def.item;
       if (!p.inventory[item] && Object.keys(p.inventory).filter((k) => p.inventory[k] > 0).length >= R.BAG_KINDS) return socket.emit('gather-error', { error: '背包滿了', stop: true });
       if ((p.inventory[item] || 0) >= R.STACK_MAX) return socket.emit('gather-error', { error: R.ITEMS[item].name + '已經帶滿 ' + R.STACK_MAX + ' 個了', stop: true });
@@ -406,6 +427,17 @@ module.exports = function attachStarforge(opts) {
       p.dir = dirOf(node.x - p.x, node.y - p.y);
       socket.emit('gathered', { nodeId: node.id, item, qty: p.inventory[item], left: node.amount });
       nsp.emit('node-changed', [node.id, node.amount, node.t]);
+      // 採光了：等最後一下的動畫播完（約 0.6 秒）再搬家，前端才看得到敲碎的那一下
+      if (node.amount <= 0) {
+        const w = world, id = node.id;
+        setTimeout(() => {
+          const n = w.nodes.get(id);
+          if (w !== world || !n || !n.active || n.amount > 0) return;
+          const from = [n.x, n.y];
+          respawnNode(w, n);
+          nsp.emit('node-respawned', { row: nodeRow(n), from });
+        }, 650);
+      }
       // 給其他人播採集動畫（揮工具、資源晃動）：[角色, 節點, 面向]；轉向也一起帶過去（站著不動時 positions 不會廣播）
       socket.broadcast.emit('char-gathering', [p.charId, node.id, p.dir]);
     });
