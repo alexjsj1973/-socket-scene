@@ -18,6 +18,8 @@
 //   * 採集：只能採自己隊伍領地內的；伺服器檢查距離、冷卻、剩餘量、背包容量。背包與資源每 30 秒批次寫回資料庫
 //     採光的資源會「搬家」：原位置消失，在同隊領地裡另找一個空位重新長出來，剩餘量從 0 開始慢慢長到可採數量上限
 //     （可採數量用現在的資源分佈設定重新抽；同一筆資料、同一個代碼，只是換位置，所以資料庫不用改）
+//   * 資源設定（後台「資源分佈」）：每種的數量、可採範圍、再生秒數、野外密度、樹木 / 花朵品種比例，每 30 秒同步一次；
+//     再生秒數、野外密度、品種比例改了馬上生效（野外資源依新密度重算，前端收到 nodes-sync 也會重算）
 //   * 資源擋路：所有可採的東西（領地裡的資源節點 + 野外的樹、礦、花）都有圓形佔地，玩家走不進去；
 //     移動時撞到會沿邊緣繞過去，繞不過去（3 秒沒有更接近目的地）就停下。野外資源由 wild.js 依 seed 算出（與瀏覽器同一份）
 //   * 換造型：玩家隨時可以從 40 種造型（look.char = c01～c40）換一個；白名單由 game_api.asp（inc_sf_character.asp）檢查並存檔，成功後廣播給所有人
@@ -82,7 +84,8 @@ module.exports = function attachStarforge(opts) {
                 nodes: new Map(), dirtyNodes: new Set(), teamSpots: new Map(), drops: new Map(), dropSeq: 0,
                 chat: { world: [], teams: new Map() },     // 聊天紀錄跟著場次走：換場次就是新的世界、新的對話
                 wild: null, nodeVer: 0, grid: null, gridVer: -1, terrKey: '', terrSet: new Set() };   // 資源擋路用（見 obstacleAt）
-    w.wild = SfWild.create(w.terrain);
+    w.cfg = SfResources.normalizeConfig(r.session.resources);              // 資源設定（數量、可採範圍、再生秒數、野外密度、品種）
+    w.wild = SfWild.create(w.terrain, SfResources.wildDensities(w.cfg));
     (nr.nodes || []).forEach((row) => { const n = nodeFromDb(row); if (n) w.nodes.set(n.id, n); });
     // 已插旗的隊伍：數量跟設定不一樣就補上 / 隱藏（例如伺服器停機時管理員改過設定）
     for (const t of teams.values()) syncTeamNodes(w, t);
@@ -206,6 +209,10 @@ module.exports = function attachStarforge(opts) {
   function applySessionUpdate(w, s) {
     const old = w.session;
     w.session = s;
+    // 資源設定（含再生秒數、野外密度、品種權重）：野外密度改了就重建野外資源（擋路判斷跟著換）
+    const oldWild = JSON.stringify(SfResources.wildDensities(w.cfg));
+    w.cfg = SfResources.normalizeConfig(s.resources);
+    if (JSON.stringify(SfResources.wildDensities(w.cfg)) !== oldWild) w.wild = SfWild.create(w.terrain, SfResources.wildDensities(w.cfg));
     if ((s.resourceEpoch || 0) !== (old.resourceEpoch || 0)) {
       // 後台已經刪掉舊的資源資料；這裡清掉記憶體（還沒存的也不要了）重新生成
       w.nodes.clear(); w.dirtyNodes.clear(); w.teamSpots.clear(); w.nodeVer++;
@@ -463,7 +470,7 @@ module.exports = function attachStarforge(opts) {
       if (!R.inBlocks(teamBlocks(team), node.x, node.y)) return socket.emit('gather-error', { error: '只能採集自己隊伍領地內的資源', stop: true });
       if (now - p.lastGather < R.GATHER_COOLDOWN - 80) return;   // 太快就忽略（不回錯誤，避免洗訊息）
       const def = R.NODE_TYPES[node.type];
-      const amount = R.currentAmount(node, now, regenMult());
+      const amount = R.currentAmount(node, now, regenMult(), world.cfg);   // 再生秒數用後台設定
       if (amount <= 0) return socket.emit('gather-error', { error: def.name + '剛長出來，還要一段時間才能採', stop: true });
       const item = def.item;
       if (!p.inventory[item] && Object.keys(p.inventory).filter((k) => p.inventory[k] > 0).length >= R.BAG_KINDS) return socket.emit('gather-error', { error: '背包滿了', stop: true });
