@@ -2,7 +2,7 @@
 // wild.js - Starforge 野外資源（裝飾）與「資源擋路」判斷（伺服器與瀏覽器共用同一份）
 //
 // 做什麼：
-//   1. 野外的樹木、礦石、花朵：每個區塊依「場次 seed + 區塊座標」雜湊出位置、種類、大小，
+//   1. 野外的樹木、礦石、花朵：每個區塊依「場次 seed + 區塊座標」雜湊出位置、種類、大小（數量依後台的野外密度），
 //      所以同一場次每個人看到的都一樣，伺服器與資料庫都不用存。只放在平原 / 丘陵上。
 //      野外的只能看、不能採；任何隊伍的領地內不放（領地裡是伺服器生成、可以採的真正資源）。
 //   2. 資源擋路：所有可採的東西（野外的 + 領地裡的資源節點）都有一個圓形的「佔地」，
@@ -19,11 +19,10 @@
   'use strict';
   const CHUNK = SfTerrain.CHUNK, T = SfTerrain.T;
 
-  const WILD_PER_CHUNK = [3, 7];                  // 野外礦石：每個區塊嘗試放幾個（落在水面、高山的會被跳過）
-  const WILD_WEIGHTS = [['rock', 34], ['coal', 16], ['iron', 16], ['copper', 13], ['aluminum', 10], ['silver', 7], ['gold', 4]];
-  const WILD_WEIGHT_SUM = WILD_WEIGHTS.reduce((a, [, w]) => a + w, 0);
-  const WILD_TREES_PER_CHUNK = [16, 32];          // 野外樹木：每個區塊嘗試放幾棵（主要長在平原，丘陵少一點）
-  const WILD_FLOWERS_PER_CHUNK = [28, 56];        // 野外花朵：每個區塊嘗試放幾叢（平原為主，有的區塊是花田、有的很少）
+  // 野外密度（每個區塊大約嘗試放幾個；落在水面、高山或太擠的會被跳過）：後台「資源分佈」的「野外密度」可改，
+  // 沒給設定就用這裡的預設（與 resources.js 的 DEFAULT_SPAWN.wild、inc_sf_settings.asp 的 SF_RESOURCES 一致）
+  const DEFAULT_WILD = { tree: 24, flower: 42, rock: 1.7, coal: 0.8, iron: 0.8, copper: 0.65, aluminum: 0.5, silver: 0.35, gold: 0.2 };
+  const ORE_TYPES = ['rock', 'coal', 'iron', 'copper', 'aluminum', 'silver', 'gold'];   // 順序固定（影響雜湊挑選的結果）
 
   // 佔地半徑（格）：角色、動物的中心點不能進到「佔地 + BODY_R」以內。
   // 要比採集距離（resources.js 的 GATHER_RANGE 1.8）小，站在旁邊才採得到。
@@ -32,8 +31,15 @@
   const BODY_R = 0.3;                             // 角色 / 動物身體半徑
   const blockR = (type) => (BLOCK_R[type] != null ? BLOCK_R[type] : ORE_R);
 
-  function create(terrain) {
+  // density = { tree: 24, rock: 1.7, ... }（後台設定；缺的用 DEFAULT_WILD）。設定改了就重新 create 一份
+  function create(terrain, density) {
     const cache = new Map();
+    const D = {};
+    for (const k of Object.keys(DEFAULT_WILD)) {
+      const v = density && density[k] != null ? Number(density[k]) : DEFAULT_WILD[k];
+      D[k] = Number.isFinite(v) && v >= 0 ? v : DEFAULT_WILD[k];
+    }
+    const oreSum = ORE_TYPES.reduce((a, k) => a + D[k], 0);
     // 某個區塊裡的野外資源（不管領地；呼叫端自己決定領地內的要不要用）
     function chunk(cx, cy) {
       const key = cx + ',' + cy;
@@ -41,21 +47,23 @@
       if (list) return list;
       list = [];
       const S = CHUNK, seed = (terrain.seed | 0) + 90613, H = (i, j) => SfTerrain.hash2(cx * 64 + i, cy * 64 + j, seed);
-      // 野外礦石：丘陵比較容易出現，稀有礦（銀、金）比較少
-      const tries = WILD_PER_CHUNK[0] + Math.floor(H(0, 0) * (WILD_PER_CHUNK[1] - WILD_PER_CHUNK[0] + 1));
+      // 野外礦石：每區塊嘗試次數 = 各種礦密度的總和（上下浮動 40%），種類依各自密度的比例挑；丘陵比較容易出現
+      const tries = Math.floor(oreSum * 0.6 + H(0, 0) * (oreSum * 0.8 + 1));
       for (let i = 1; i <= tries; i++) {
         const x = cx * S + 1.5 + H(i, 1) * (S - 3), y = cy * S + 1.5 + H(i, 2) * (S - 3);
         const t = terrain.at(x, y);
         if (t !== T.PLAIN && t !== T.HILL) continue;
         if (t === T.PLAIN && H(i, 3) < 0.45) continue;      // 平原少一點
-        let r = H(i, 4) * WILD_WEIGHT_SUM, type = 'rock';
-        for (const [k, w] of WILD_WEIGHTS) { if ((r -= w) < 0) { type = k; break; } }
+        if (oreSum <= 0) break;
+        let r = H(i, 4) * oreSum, type = null;
+        for (const k of ORE_TYPES) { if ((r -= D[k]) < 0 && D[k] > 0) { type = k; break; } }
+        if (!type) continue;
         if (list.some((o) => Math.hypot(o.x - x, o.y - y) < 4.5)) continue;
         list.push({ wild: true, id: 'w' + key + ':' + i, type, x: Math.floor(x) + 0.5, y: Math.floor(y) + 0.5, size: H(i, 5) < 0.4 ? 'l' : H(i, 5) < 0.85 ? 'm' : 's' });
       }
       // 野外樹木：區塊的「樹林密度」也用雜湊決定，有的區塊樹多、有的稀疏
       const dens = 0.35 + H(0, 9) * 0.65;
-      const treeTries = Math.round((WILD_TREES_PER_CHUNK[0] + H(0, 8) * (WILD_TREES_PER_CHUNK[1] - WILD_TREES_PER_CHUNK[0])) * dens);
+      const treeTries = Math.round((D.tree * 2 / 3 + H(0, 8) * (D.tree * 2 / 3)) * dens);   // 密度 ×（2/3～4/3）× 樹林密度
       for (let i = 1; i <= treeTries; i++) {
         const x = cx * S + 1.5 + H(i + 40, 1) * (S - 3), y = cy * S + 1.5 + H(i + 40, 2) * (S - 3);
         const t = terrain.at(x, y);
@@ -66,7 +74,7 @@
       }
       // 野外花朵：花田密度也用雜湊決定；離樹、礦遠一點，花跟花可以近一點
       const fdens = Math.pow(H(0, 11), 1.5);
-      const flowerTries = Math.round((WILD_FLOWERS_PER_CHUNK[0] + H(0, 12) * (WILD_FLOWERS_PER_CHUNK[1] - WILD_FLOWERS_PER_CHUNK[0])) * (0.4 + fdens * 0.6));
+      const flowerTries = Math.round((D.flower * 2 / 3 + H(0, 12) * (D.flower * 2 / 3)) * (0.4 + fdens * 0.6));
       for (let i = 1; i <= flowerTries; i++) {
         const x = cx * S + 1.5 + H(i + 90, 1) * (S - 3), y = cy * S + 1.5 + H(i + 90, 2) * (S - 3);
         const t = terrain.at(x, y);
@@ -126,5 +134,5 @@
     return best ? [best[0], best[1], true] : null;
   }
 
-  return { create, stepAround, blockR, BODY_R };
+  return { create, stepAround, blockR, BODY_R, DEFAULT_WILD };
 });
