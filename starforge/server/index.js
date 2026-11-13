@@ -24,6 +24,8 @@
 //     移動時撞到會沿邊緣繞過去，繞不過去（3 秒沒有更接近目的地）就停下。野外資源由 wild.js 依 seed 算出（與瀏覽器同一份）
 //   * 換造型：玩家隨時可以從 40 種造型（look.char = c01～c40）換一個；白名單由 game_api.asp（inc_sf_character.asp）檢查並存檔，成功後廣播給所有人
 //   * 背包：可以放棄（直接消失）或丟在地上；地上的物品任何人都能撿，10 分鐘沒人撿就消失（只放記憶體，重啟會清空）
+//   * 工廠流水線（2026-11-13）：factory-server.js（模擬在 factory.js，前後端共用）；這裡只在載入世界、插旗、採集、
+//     進場 / 離線、場次切換時呼叫它（搜尋 fac.）。設計見 docs/FACTORY_DESIGN.md
 //   * 聊天：跟社群平台集會廣場同一套玩法（對話紀錄 + 頭上泡泡 + 進出世界的系統訊息），分「全體」與「隊伍」兩個頻道；
 //     紀錄只放記憶體（各留最近 CHAT_LOG_MAX 則），換場次或重啟就清空；隊伍頻道只送給同隊（Socket.io room team:<隊伍編號>）
 // 狀態只放在記憶體（Render 重啟會清空），需要保留的（旗子、位置）都寫進資料庫，
@@ -34,6 +36,7 @@ const SfTerrain = require('./terrain');
 const SfResources = require('./resources');
 const SfWild = require('./wild');
 const createAspApi = require('./asp-api');
+const createFactoryServer = require('./factory-server');   // 工廠流水線（2026-11-13，設計見 docs/FACTORY_DESIGN.md）
 
 const TICK_MS = 100;                 // 伺服器移動模擬間隔
 const SPEED = 7;                     // 角色移動速度（格 / 秒）
@@ -55,8 +58,8 @@ module.exports = function attachStarforge(opts) {
   const api = createAspApi(apiUrl, process.env.STARFORGE_API_KEY || opts.apiKey || '');
   const nsp = io.of('/starforge');
 
-  // 瀏覽器用的地形程式（與伺服器同一份）
-  ['terrain.js', 'resources.js', 'wild.js'].forEach((f) => {
+  // 瀏覽器用的地形程式（與伺服器同一份）；factory.js = 工廠流水線的模擬（前後端同一份，畫面才會跟伺服器一致）
+  ['terrain.js', 'resources.js', 'wild.js', 'factory.js'].forEach((f) => {
     app.get('/starforge/' + f, (req, res) => {
       res.set('Cache-Control', 'public, max-age=300');
       res.sendFile(path.join(__dirname, f));
@@ -72,6 +75,15 @@ module.exports = function attachStarforge(opts) {
   let loading = null;    // 載入中的 Promise，避免同時載入兩次
   const players = new Map();   // socket.id → player
   let plantQueue = Promise.resolve();   // 插旗一次處理一件，避免兩隊同時插在太近的位置
+
+  // ---- 工廠流水線（factory-server.js）：用到的世界資料都透過這裡拿，函式在呼叫時才取用 ----
+  const fac = createFactoryServer({
+    nsp, api, players,
+    getWorld: () => world,
+    teamBlocks: (team) => teamBlocks(team),
+    sendChat: (msg) => sendChat(msg),
+    dropAt: (item, qty, x, y) => dropAt(item, qty, x, y)
+  });
 
   async function loadWorld() {
     const r = await api.world();
@@ -89,6 +101,8 @@ module.exports = function attachStarforge(opts) {
     (nr.nodes || []).forEach((row) => { const n = nodeFromDb(row); if (n) w.nodes.set(n.id, n); });
     // 已插旗的隊伍：數量跟設定不一樣就補上 / 隱藏（例如伺服器停機時管理員改過設定）
     for (const t of teams.values()) syncTeamNodes(w, t);
+    // 工廠：載入各隊存檔並補算離線期間的生產（採礦機底下的資源也一併確認）
+    await fac.loadAll(w);
     return w;
   }
   // game_api.asp act=nodes 的一列：[id, teamId, type, x, y, max, amount, changedMs, active]
@@ -174,6 +188,7 @@ module.exports = function attachStarforge(opts) {
     if (!loading) loading = loadWorld().finally(() => { loading = null; });
     const w = await loading;
     if (!world || world.session.id !== w.session.id) {
+      if (world) fac.saveAll(world, true);      // 舊場次的工廠先存起來
       // 換場次：舊場次的玩家全部請回大廳
       for (const [sid, p] of players) {
         const s = nsp.sockets.get(sid);
@@ -198,6 +213,7 @@ module.exports = function attachStarforge(opts) {
         if (s) { s.emit('join-error', { error: r.ok ? '世界場次已更換' : '目前沒有進行中的世界', needLobby: true }); s.disconnect(true); }
       }
       players.clear();
+      fac.saveAll(w, true);                      // 場次結束 / 更換前把工廠存起來
       world = null;
       return;
     }
@@ -217,6 +233,7 @@ module.exports = function attachStarforge(opts) {
       // 後台已經刪掉舊的資源資料；這裡清掉記憶體（還沒存的也不要了）重新生成
       w.nodes.clear(); w.dirtyNodes.clear(); w.teamSpots.clear(); w.nodeVer++;
       for (const t of w.teams.values()) syncTeamNodes(w, t);
+      for (const t of w.teams.values()) fac.revalidateMiners(w, t.id);   // 採礦機改挖範圍內的新資源，或停機
       nsp.emit('nodes-reset', { rows: activeNodeRows(w), resources: s.resources || null, regenMultiplier: s.regenMultiplier });
       flushNodes();
       console.log('[starforge] 資源已重置（epoch ' + s.resourceEpoch + '）');
@@ -224,7 +241,7 @@ module.exports = function attachStarforge(opts) {
     }
     const cfgChanged = JSON.stringify(s.resources || null) !== JSON.stringify(old.resources || null);
     const changed = [];
-    if (cfgChanged) for (const t of w.teams.values()) changed.push(...syncTeamNodes(w, t));
+    if (cfgChanged) for (const t of w.teams.values()) { changed.push(...syncTeamNodes(w, t)); fac.revalidateMiners(w, t.id); }
     if (cfgChanged || s.regenMultiplier !== old.regenMultiplier) emitNodeSync(changed);
     if (changed.length) flushNodes();
   }
@@ -339,6 +356,7 @@ module.exports = function attachStarforge(opts) {
   setInterval(() => { flushNodes(); for (const p of players.values()) saveInv(p); }, FLUSH_EVERY_MS);
 
   nsp.on('connection', (socket) => {
+    fac.bind(socket);                            // 工廠操作：fac-build / fac-remove / fac-put / fac-take / craft …（factory-server.js）
     // ---- 進場 ----
     socket.on('join', async (data) => {
       try {
@@ -405,6 +423,7 @@ module.exports = function attachStarforge(opts) {
         });
         socket.broadcast.emit('char-joined', publicPlayer(p));
         systemChat(p.name + ' 進入了世界');
+        fac.onJoin(socket, p);                   // 工廠：自己隊伍的完整狀態 + 其他隊伍的建築外觀 + 手動合成佇列
       } catch (e) {
         console.error('[starforge] join 失敗', e);
         socket.emit('join-error', { error: '進入世界失敗：' + e.message });
@@ -454,6 +473,7 @@ module.exports = function attachStarforge(opts) {
         // 領地裡長出資源，馬上存檔（位置與可採數量從此固定）
         emitNodeSync(syncTeamNodes(world, team));
         flushNodes();
+        fac.onFlag(world, team);                 // 建立隊伍的工廠，隊員馬上可以開始蓋
       }).catch((e) => console.error('[starforge] 插旗失敗', e));
     });
 
@@ -485,7 +505,8 @@ module.exports = function attachStarforge(opts) {
       socket.emit('gathered', { nodeId: node.id, item, qty: p.inventory[item], left: node.amount });
       nsp.emit('node-changed', [node.id, node.amount, node.t]);
       // 採光了：等最後一下的動畫播完（約 0.6 秒）再搬家，前端才看得到敲碎的那一下
-      if (node.amount <= 0) {
+      //   有採礦機蓋在上面的不搬家（留在原地慢慢長回來，採礦機才不會突然沒東西挖）
+      if (node.amount <= 0 && !fac.isNodeClaimed(world, node)) {
         const w = world, id = node.id;
         setTimeout(() => {
           const n = w.nodes.get(id);
@@ -536,11 +557,7 @@ module.exports = function attachStarforge(opts) {
       if (!got) return;
       // 丟在面前一點點（走不到的地方就丟在腳邊），稍微錯開避免疊在一起
       const ang = p.dir * Math.PI / 4;
-      let x = p.x + Math.sin(ang) * 0.8 + (Math.random() - 0.5) * 0.4, y = p.y + Math.cos(ang) * 0.8 + (Math.random() - 0.5) * 0.4;
-      if (!w.terrain.walkable(x, y)) { x = p.x; y = p.y; }
-      const d = { id: 'd' + (++w.dropSeq), item: got.item, qty: got.qty, x: +x.toFixed(2), y: +y.toFixed(2), t: Date.now() };
-      w.drops.set(d.id, d);
-      nsp.emit('drop-added', dropRow(d));
+      dropAt(got.item, got.qty, p.x + Math.sin(ang) * 0.8, p.y + Math.cos(ang) * 0.8, p.x, p.y);
     });
     socket.on('pickup', (data) => {
       const p = players.get(socket.id);
@@ -593,6 +610,7 @@ module.exports = function attachStarforge(opts) {
       const p = players.get(socket.id);
       if (!p) return;
       players.delete(socket.id);
+      fac.onLeave(p);                            // 手動合成還沒做完的退回背包（要在存背包之前）
       savePos(p);
       saveInv(p);
       nsp.emit('char-left', { id: p.charId });
@@ -600,6 +618,19 @@ module.exports = function attachStarforge(opts) {
       systemChat(p.name + ' 離開了世界');
     });
   });
+
+  // 在地上放一堆物品（玩家丟的、背包裝不下的工廠退款 / 合成產品）；(fx, fy) = 走不到時改放的位置
+  function dropAt(item, qty, x, y, fx, fy) {
+    const w = world;
+    if (!w || !SfResources.ITEMS[item] || !(qty > 0)) return;
+    x += (Math.random() - 0.5) * 0.4; y += (Math.random() - 0.5) * 0.4;
+    if (!w.terrain.walkable(x, y)) { x = fx != null ? fx : Math.floor(x) + 0.5; y = fy != null ? fy : Math.floor(y) + 0.5; }
+    for (let left = qty; left > 0; left -= SfResources.STACK_MAX) {
+      const d = { id: 'd' + (++w.dropSeq), item, qty: Math.min(left, SfResources.STACK_MAX), x: +x.toFixed(2), y: +y.toFixed(2), t: Date.now() };
+      w.drops.set(d.id, d);
+      nsp.emit('drop-added', dropRow(d));
+    }
+  }
 
   // 地上的物品放太久就消失
   setInterval(() => {
