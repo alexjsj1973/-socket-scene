@@ -75,7 +75,7 @@
   const GATHER_COOLDOWN = 900;  // 每次採集的間隔（毫秒）
   const PICKUP_RANGE = 1.5;     // 角色離地上物品多近才能撿（格）
   const STACK_MAX = 999;        // 每種物品最多帶多少
-  const BAG_KINDS = 20;         // 背包最多幾種物品
+  const BAG_KINDS = 40;         // 背包最多幾種物品（2026-11-13 加入工廠流水線後物品變多，20 → 40）
   const TILES_PER_NODE = 6;     // 每個資源大約要佔幾格陸地（插旗時檢查領地放不放得下）
   const FLAG_CLEAR = 3;         // 旗子周圍幾格內不放資源（留給基地）
 
