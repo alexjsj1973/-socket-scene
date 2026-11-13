@@ -46,6 +46,13 @@ module.exports = function createAspApi(baseUrl, apiKey) {
       items: Object.keys(inventory).filter((k) => inventory[k] > 0).map((k) => k + ':' + inventory[k]).join(',') }),
     // nodes = [{ id, teamId, type, x, y, max, amount, t, active }, ...]；epoch = 目前的資源 epoch（管理員重置後，舊的那批會被拒絕）
     saveNodes: (nodes, epoch) => request('POST', { act: 'savenodes', epoch,
-      nodes: nodes.map((n) => [n.id, n.teamId, n.type, n.x, n.y, n.max, n.amount, n.t, n.active ? 1 : 0].join(':')).join(';') })
+      nodes: nodes.map((n) => [n.id, n.teamId, n.type, n.x, n.y, n.max, n.amount, n.t, n.active ? 1 : 0].join(':')).join(';') }),
+    // ---- 工廠流水線（factory-server.js）----
+    // 所有隊伍的工廠存檔：{ ok, factories: [{ teamId, ver, savedMs, data }] }；data = deflate 壓縮後的 base64（ASP 不解讀，原樣存取）
+    factories: () => request('GET', { act: 'factory' }),
+    // 存一隊的工廠：ver 要比資料庫裡的大才會寫入（舊資料不會蓋掉新資料），失敗時回 { staleVersion:true, ver }
+    saveFactory: (teamId, ver, savedMs, data) => request('POST', { act: 'savefactory', teamId, ver, savedMs, data }),
+    // 里程碑完成後更新隊伍等級
+    teamLevel: (teamId, level) => request('POST', { act: 'teamlevel', teamId, level })
   };
 };
