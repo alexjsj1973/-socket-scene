@@ -47,6 +47,13 @@ const DROP_TTL_MS = 10 * 60 * 1000;  // 地上的物品多久沒人撿就消失
 const DROP_MAX = 500;                // 整個世界最多同時有幾堆地上物品
 const ITEM_OP_GAP_MS = 200;          // 丟棄 / 丟地上 / 撿起的最短間隔（防連點洗訊息）
 const LOOK_GAP_MS = 1500;            // 換造型的最短間隔
+// ---- 手持道具：只決定角色手上拿什麼、播什麼動作，不影響採集速度、戰鬥或其他數值 ----
+// 2026-11-14 起道具是背包物品（resources.js 的 EQUIPMENT，與 assets/sunnyside/equipment/catalog.json 的 id 一致）：
+//   背包裡要有才能拿；背包裡沒了（丟掉、放進機器…）會自動收起
+const HELD_ITEMS = new Set(Object.keys(SfResources.EQUIPMENT));
+const HELD_CHECK_MS = 2000;          // 多久檢查一次「手上的道具還在不在背包」
+const HELD_GAP_MS = 300;             // 換手持道具的最短間隔
+const USE_GAP_MS = 700;              // 揮動 / 使用道具（只播動畫）的最短間隔
 const CHAT_MAX_LEN = 100;            // 一則聊天最多幾個字（與前端輸入框 maxlength 一致）
 const CHAT_GAP_MS = 700;             // 同一人兩則聊天的最短間隔（防洗版）
 const CHAT_LOG_MAX = 60;             // 全體頻道、每個隊伍頻道各保留幾則（新進場的人看得到最近的對話）
@@ -256,7 +263,7 @@ module.exports = function attachStarforge(opts) {
     });
   }
 
-  const publicPlayer = (p) => ({ id: p.charId, name: p.name, look: p.look, teamId: p.teamId, x: p.x, y: p.y, dir: p.dir });
+  const publicPlayer = (p) => ({ id: p.charId, name: p.name, look: p.look, teamId: p.teamId, x: p.x, y: p.y, dir: p.dir, held: p.held || null });
   const publicTeam = (t) => ({ id: t.id, name: t.name, level: t.level, flagX: t.flagX, flagY: t.flagY });
   const regenMult = () => (world && world.session.regenMultiplier) || 1;
   // 給前端的資源：[id, type, x, y, max, amount, changedMs]（只送顯示中的）
@@ -398,7 +405,7 @@ module.exports = function attachStarforge(opts) {
         const p = {
           socketId: socket.id, memberId: v.memberId, charId: c.id, name: c.name, look: c.look, level: c.level,
           teamId: team.id, x: pos.x, y: pos.y, tx: null, ty: null, dir: 0, lastSave: Date.now(),
-          inventory: {}, invDirty: false, lastGather: 0, lastItemOp: 0, lastLook: 0
+          inventory: {}, invDirty: false, lastGather: 0, lastItemOp: 0, lastLook: 0, held: null, lastHeld: 0, lastUse: 0
         };
         (pr.inventory || []).forEach((it) => { if (SfResources.ITEMS[it.code]) p.inventory[it.code] = it.qty; });
         players.set(socket.id, p);
@@ -492,7 +499,7 @@ module.exports = function attachStarforge(opts) {
       const def = R.NODE_TYPES[node.type];
       const amount = R.currentAmount(node, now, regenMult(), world.cfg);   // 再生秒數用後台設定
       if (amount <= 0) return socket.emit('gather-error', { error: def.name + '剛長出來，還要一段時間才能採', stop: true });
-      const item = def.item;
+      const item = R.nodeItem(node, world.cfg);           // 礦物礦脈依位置決定是哪種礦物
       if (!p.inventory[item] && Object.keys(p.inventory).filter((k) => p.inventory[k] > 0).length >= R.BAG_KINDS) return socket.emit('gather-error', { error: '背包滿了', stop: true });
       if ((p.inventory[item] || 0) >= R.STACK_MAX) return socket.emit('gather-error', { error: R.ITEMS[item].name + '已經帶滿 ' + R.STACK_MAX + ' 個了', stop: true });
       p.lastGather = now;
@@ -593,6 +600,30 @@ module.exports = function attachStarforge(opts) {
       nsp.emit('char-look', { id: p.charId, look: p.look });
     });
 
+    // ---- 手持道具：白名單檢查後廣播給所有人（只存在記憶體；前端重連後會自己再送一次）----
+    socket.on('set-held', (data) => {
+      const p = players.get(socket.id);
+      if (!p || !world || !data || typeof data !== 'object') return;
+      const now = Date.now();
+      if (now - p.lastHeld < HELD_GAP_MS) return;
+      const item = data.item == null || data.item === '' ? null : String(data.item);
+      if (item !== null && !HELD_ITEMS.has(item)) return;
+      if (item !== null && !(p.inventory[item] > 0)) return socket.emit('held-error', { error: '背包裡沒有「' + SfResources.ITEMS[item].name + '」，先用手動合成或組裝機做一個' });
+      p.lastHeld = now;
+      if (p.held === item) return;
+      p.held = item;
+      nsp.emit('char-held', { id: p.charId, held: item });
+    });
+    // ---- 使用手持道具：只是動作展示（揮劍、施法、釣魚…），伺服器限速後轉給其他人播放 ----
+    socket.on('use-held', () => {
+      const p = players.get(socket.id);
+      if (!p || !world || !p.held) return;
+      const now = Date.now();
+      if (now - p.lastUse < USE_GAP_MS) return;
+      p.lastUse = now;
+      socket.broadcast.emit('char-use', { id: p.charId, item: p.held, dir: p.dir });
+    });
+
     // ---- 聊天：只收文字與頻道，說話的人、隊伍、時間都由伺服器決定 ----
     socket.on('chat', (data) => {
       const p = players.get(socket.id);
@@ -631,6 +662,13 @@ module.exports = function attachStarforge(opts) {
       nsp.emit('drop-added', dropRow(d));
     }
   }
+
+  // 手上的道具不在背包裡了（丟掉、放進機器、拿去合成…）→ 自動收起，大家畫面同步
+  setInterval(() => {
+    for (const p of players.values()) {
+      if (p.held && !(p.inventory[p.held] > 0)) { p.held = null; nsp.emit('char-held', { id: p.charId, held: null }); }
+    }
+  }, HELD_CHECK_MS);
 
   // 地上的物品放太久就消失
   setInterval(() => {
