@@ -21,8 +21,8 @@
 
   // 野外密度（每個區塊大約嘗試放幾個；落在水面、高山或太擠的會被跳過）：後台「資源分佈」的「野外密度」可改，
   // 沒給設定就用這裡的預設（與 resources.js 的 DEFAULT_SPAWN.wild、inc_sf_settings.asp 的 SF_RESOURCES 一致）
-  const DEFAULT_WILD = { tree: 24, flower: 42, rock: 1.7, coal: 0.8, iron: 0.8, copper: 0.65, aluminum: 0.5, silver: 0.35, gold: 0.2 };
-  const ORE_TYPES = ['rock', 'coal', 'iron', 'copper', 'aluminum', 'silver', 'gold'];   // 順序固定（影響雜湊挑選的結果）
+  const DEFAULT_WILD = { tree: 24, flower: 42, rock: 1.7, coal: 0.8, iron: 0.8, copper: 0.65, aluminum: 0.5, silver: 0.35, gold: 0.2, mineral: 0.6 };
+  const ORE_TYPES = ['rock', 'coal', 'iron', 'copper', 'aluminum', 'silver', 'gold', 'mineral'];   // 順序固定（影響雜湊挑選的結果）；新種類一律加在最後
 
   // 佔地半徑（格）：角色、動物的中心點不能進到「佔地 + BODY_R」以內。
   // 要比採集距離（resources.js 的 GATHER_RANGE 1.8）小，站在旁邊才採得到。
