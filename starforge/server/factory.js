@@ -71,7 +71,12 @@
                         desc: '把物品往箭頭方向送。指向機器 = 送進去；從機器往外指 = 把產品接出來。從旁邊接上另一條就會合流。' },
     fast_belt:        { name: '快速輸送帶', cat: 'logistics', kind: 'belt',     w: 1, h: 1, cost: { iron_plate: 1, iron_gear: 1 }, speed: 24, tech: 'logistics2', icon: '⏩',
                         desc: '速度是一般輸送帶的兩倍（每秒 2 格、每秒 8 個物品）。' },
-    splitter:         { name: '分流器',     cat: 'logistics', kind: 'splitter', w: 1, h: 1, cost: { iron_plate: 5, circuit: 3 }, tech: 'logistics', icon: '🔱',
+    // 2026-11-13 新增：一分二、二合一（不用研究，一開始就能蓋）
+    splitter2:        { name: '一分二',     cat: 'logistics', kind: 'splitter2', w: 1, h: 1, cost: { iron_plate: 2, iron_gear: 1 }, icon: '🔱',
+                        desc: '一分二分流器：從後面進來的物品，輪流送往左、右兩邊（哪邊塞住就全部送另一邊）。T 字路口，左右各接一條往外的輸送帶。' },
+    merger:           { name: '二合一',     cat: 'logistics', kind: 'merger',   w: 1, h: 1, cost: { iron_plate: 2, iron_gear: 1 }, icon: '🔽',
+                        desc: '二合一合流器：左、右（也可以加上後面）進來的輸送帶，公平地輪流合成一條，從箭頭方向送出去。' },
+    splitter:         { name: '三向分流器', cat: 'logistics', kind: 'splitter', w: 1, h: 1, cost: { iron_plate: 5, circuit: 3 }, tech: 'logistics', icon: '🔆',
                         desc: '從後面進來的物品，輪流送往前、左、右三個方向（哪邊塞住就跳過）。' },
     sorter:           { name: '分類器',     cat: 'logistics', kind: 'sorter',   w: 1, h: 1, cost: { iron_plate: 5, circuit: 5 }, tech: 'smart_sort', icon: '🔀',
                         desc: '設定一種物品：符合的往前送，其他的輪流往左右送。' },
@@ -125,7 +130,46 @@
     advanced_circuit: { machine: 'assembler', in: { circuit: 2, copper_wire: 4, aluminum_plate: 1 }, out: { advanced_circuit: 1 }, time: 60, tech: 'advanced_circuit' },
     motor:            { machine: 'assembler', in: { steel_plate: 1, iron_gear: 2, copper_wire: 3 }, out: { motor: 1 }, time: 80, tech: 'automation2' },
     alloy_frame:      { machine: 'assembler', in: { aluminum_plate: 2, steel_plate: 1 }, out: { alloy_frame: 1 }, time: 60, tech: 'advanced_circuit' },
-    blue_pack:        { machine: 'assembler', in: { advanced_circuit: 1, motor: 1, gold_bar: 1 }, out: { blue_pack: 2 }, time: 120, tech: 'blue_science' }
+    blue_pack:        { machine: 'assembler', in: { advanced_circuit: 1, motor: 1, gold_bar: 1 }, out: { blue_pack: 2 }, time: 120, tech: 'blue_science' },
+    // ---- 道具裝備（2026-11-14）：手動合成或組裝機都能做；做好放進背包才能拿在手上。group = 合成面板的分組標題 ----
+    //   法杖、法器、能量盾、提燈要用礦物礦脈採到的礦物（剛玉、水晶、磁鐵礦、翡翠、孔雀石、蛋白石、螢石、石英）
+    // 近戰武器
+    short_sword:      { machine: 'assembler', in: { iron_plate: 3, wood: 2 }, out: { short_sword: 1 }, time: 30, hand: true, group: '近戰武器' },
+    long_sword:       { machine: 'assembler', in: { steel_plate: 2, iron_plate: 2, wood: 2 }, out: { long_sword: 1 }, time: 50, hand: true, group: '近戰武器', tech: 'steel' },
+    spear:            { machine: 'assembler', in: { iron_plate: 2, wood: 4 }, out: { spear: 1 }, time: 30, hand: true, group: '近戰武器' },
+    battle_axe:       { machine: 'assembler', in: { iron_plate: 4, wood: 3 }, out: { battle_axe: 1 }, time: 40, hand: true, group: '近戰武器' },
+    war_hammer:       { machine: 'assembler', in: { steel_plate: 3, wood: 2 }, out: { war_hammer: 1 }, time: 50, hand: true, group: '近戰武器', tech: 'steel' },
+    dagger:           { machine: 'assembler', in: { silver_bar: 1, iron_plate: 1 }, out: { dagger: 1 }, time: 30, hand: true, group: '近戰武器' },
+    // 遠程武器
+    bow:              { machine: 'assembler', in: { wood: 5, copper_wire: 2 }, out: { bow: 1 }, time: 30, hand: true, group: '遠程武器' },
+    crossbow:         { machine: 'assembler', in: { wood: 3, copper_plate: 3, iron_gear: 2 }, out: { crossbow: 1 }, time: 40, hand: true, group: '遠程武器' },
+    pistol:           { machine: 'assembler', in: { copper_plate: 3, iron_gear: 2, wood: 1, coal: 1 }, out: { pistol: 1 }, time: 50, hand: true, group: '遠程武器' },
+    rifle:            { machine: 'assembler', in: { steel_plate: 2, iron_gear: 3, wood: 3 }, out: { rifle: 1 }, time: 60, hand: true, group: '遠程武器', tech: 'steel' },
+    boomerang:        { machine: 'assembler', in: { wood: 4 }, out: { boomerang: 1 }, time: 20, hand: true, group: '遠程武器' },
+    // 法杖與法器
+    fire_staff:       { machine: 'assembler', in: { wood: 3, gold_bar: 1, corundum: 2 }, out: { fire_staff: 1 }, time: 60, hand: true, group: '法杖與法器' },
+    ice_staff:        { machine: 'assembler', in: { wood: 3, silver_bar: 1, crystal: 2 }, out: { ice_staff: 1 }, time: 60, hand: true, group: '法杖與法器' },
+    lightning_wand:   { machine: 'assembler', in: { gold_bar: 1, copper_wire: 4, magnetite: 2 }, out: { lightning_wand: 1 }, time: 50, hand: true, group: '法杖與法器' },
+    guardian_staff:   { machine: 'assembler', in: { wood: 3, silver_bar: 1, jade: 2 }, out: { guardian_staff: 1 }, time: 60, hand: true, group: '法杖與法器' },
+    healing_staff:    { machine: 'assembler', in: { wood: 3, flower: 5, malachite: 2 }, out: { healing_staff: 1 }, time: 60, hand: true, group: '法杖與法器' },
+    grimoire:         { machine: 'assembler', in: { wood: 2, flower: 3, gold_bar: 1, opal: 1 }, out: { grimoire: 1 }, time: 80, hand: true, group: '法杖與法器' },
+    // 盾牌
+    wood_shield:      { machine: 'assembler', in: { wood: 6, iron_plate: 1 }, out: { wood_shield: 1 }, time: 30, hand: true, group: '盾牌' },
+    steel_shield:     { machine: 'assembler', in: { steel_plate: 4, iron_plate: 2 }, out: { steel_shield: 1 }, time: 60, hand: true, group: '盾牌', tech: 'steel' },
+    energy_shield:    { machine: 'assembler', in: { advanced_circuit: 2, aluminum_plate: 2, fluorite: 2 }, out: { energy_shield: 1 }, time: 80, hand: true, group: '盾牌', tech: 'advanced_circuit' },
+    // 採集與生活工具
+    pickaxe:          { machine: 'assembler', in: { iron_plate: 3, wood: 2 }, out: { pickaxe: 1 }, time: 30, hand: true, group: '採集與生活工具' },
+    wood_axe:         { machine: 'assembler', in: { iron_plate: 2, wood: 2 }, out: { wood_axe: 1 }, time: 25, hand: true, group: '採集與生活工具' },
+    power_drill:      { machine: 'assembler', in: { motor: 1, steel_plate: 1, circuit: 2 }, out: { power_drill: 1 }, time: 80, hand: true, group: '採集與生活工具', tech: 'automation2' },
+    chainsaw:         { machine: 'assembler', in: { motor: 1, steel_plate: 2, iron_gear: 2 }, out: { chainsaw: 1 }, time: 80, hand: true, group: '採集與生活工具', tech: 'automation2' },
+    fishing_rod:      { machine: 'assembler', in: { wood: 3, copper_wire: 2 }, out: { fishing_rod: 1 }, time: 20, hand: true, group: '採集與生活工具' },
+    watering_can:     { machine: 'assembler', in: { copper_plate: 4 }, out: { watering_can: 1 }, time: 25, hand: true, group: '採集與生活工具' },
+    shovel:           { machine: 'assembler', in: { iron_plate: 2, wood: 2 }, out: { shovel: 1 }, time: 25, hand: true, group: '採集與生活工具' },
+    hoe:              { machine: 'assembler', in: { iron_plate: 1, wood: 3 }, out: { hoe: 1 }, time: 25, hand: true, group: '採集與生活工具' },
+    sickle:           { machine: 'assembler', in: { iron_plate: 2, wood: 1 }, out: { sickle: 1 }, time: 20, hand: true, group: '採集與生活工具' },
+    build_hammer:     { machine: 'assembler', in: { iron_plate: 2, wood: 2, iron_gear: 1 }, out: { build_hammer: 1 }, time: 25, hand: true, group: '採集與生活工具' },
+    repair_wrench:    { machine: 'assembler', in: { iron_plate: 3, iron_gear: 1 }, out: { repair_wrench: 1 }, time: 25, hand: true, group: '採集與生活工具' },
+    lantern:          { machine: 'assembler', in: { iron_plate: 1, copper_plate: 1, coal: 2, quartz: 1 }, out: { lantern: 1 }, time: 25, hand: true, group: '採集與生活工具' }
   };
   // 熔爐：原料 → 配方（放進去的是什麼就煉什麼）
   const FURNACE_BY_INPUT = {};
@@ -184,7 +228,8 @@
       case 'generator': b.fuel = {}; b.en = 0; break;
       case 'lab': b.inv = {}; b.w = 0; b.ld = 0; break;
       case 'chest': b.inv = {}; break;
-      case 'splitter': b.buf = null; b.rr = 0; break;
+      case 'splitter': case 'splitter2': b.buf = null; b.rr = 0; break;
+      case 'merger': b.ins = [null, null, null]; b.rr = 0; break;     // 後、左、右三個入口各暫存 1 個
       case 'sorter': b.buf = null; b.rr = 0; b.flt = null; break;
       case 'inserter': b.h = null; b.ph = 0; break;
     }
@@ -221,7 +266,7 @@
       for (let yy = 0; yy < d.h; yy++) for (let xx = 0; xx < d.w; xx++) grid.set(key(b.x + xx, b.y + yy), b);
     }
     const at = (x, y) => grid.get(key(x, y)) || null;
-    const isBeltish = (k) => k === 'belt' || k === 'splitter' || k === 'sorter';
+    const isBeltish = (k) => k === 'belt' || k === 'splitter' || k === 'sorter' || k === 'splitter2' || k === 'merger';
     // 物品從 (x, y) 往 md 方向離開，進入隔壁那一格：回傳 { t 目標建築, mode: 'belt' | 'split' | 'bld', p 進入位置, f 進入邊 } 或 null
     function entry(x, y, md, self) {
       const nx = x + DIRS[md][0], ny = y + DIRS[md][1], t = at(nx, ny);
@@ -235,12 +280,17 @@
         let fed = false;
         if (feeder) {
           const fk = defOf(feeder).kind;
-          if (fk === 'belt' || fk === 'splitter' || fk === 'sorter') fed = feeder.d === t.d;
+          if (isBeltish(fk)) fed = feeder.d === t.d;
           else if (fk !== 'inserter' && fk !== 'chest' && fk !== 'hub' && fk !== 'lab') fed = true;   // 機器從後面輸出
         }
         return fed ? { t, mode: 'belt', p: BELT_L / 2, f: from } : { t, mode: 'belt', p: 0, f: from };
       }
-      if (k === 'splitter' || k === 'sorter') return t.d === md ? { t, mode: 'split' } : null;
+      if (k === 'splitter' || k === 'sorter' || k === 'splitter2') return t.d === md ? { t, mode: 'split' } : null;
+      // 二合一：前面以外的三邊都能進；slot 0 = 從後面、1 = 從左邊、2 = 從右邊
+      if (k === 'merger') {
+        if (md === ((t.d + 2) & 3)) return null;
+        return { t, mode: 'merge', slot: md === t.d ? 0 : md === ((t.d + 1) & 3) ? 1 : 2 };
+      }
       if (k === 'inserter') return null;                 // 機械手臂自己會抓
       return { t, mode: 'bld' };
     }
@@ -250,6 +300,8 @@
       const k = defOf(b).kind;
       if (k === 'belt') { belts.push(b); front.set(b.id, entry(b.x, b.y, b.d, b)); }
       else if (k === 'splitter' || k === 'sorter') front.set(b.id, [b.d, (b.d + 3) & 3, (b.d + 1) & 3].map((md) => entry(b.x, b.y, md, b)));
+      else if (k === 'splitter2') front.set(b.id, [(b.d + 3) & 3, (b.d + 1) & 3].map((md) => entry(b.x, b.y, md, b)));   // [左, 右]
+      else if (k === 'merger') front.set(b.id, entry(b.x, b.y, b.d, b));
     }
     // 下游先算：depth = 往前數到盡頭的格數（環狀的就停）
     const depth = new Map();
@@ -324,8 +376,9 @@
       case 'lab': return PACKS.indexOf(item) >= 0 && (b.inv[item] || 0) < LAB_PACK_CAP;
       case 'chest': return sumMap(b.inv) < CHEST_CAP && (b.inv[item] != null || Object.keys(b.inv).length < CHEST_KINDS);
       case 'hub': return (S.hub[item] || 0) < HUB_CAP;
-      case 'splitter': return !b.buf;
+      case 'splitter': case 'splitter2': return !b.buf;
       case 'sorter': return !b.buf;
+      case 'merger': return b.ins.indexOf(null) >= 0;
       default: return false;
     }
   }
@@ -364,14 +417,15 @@
       case 'miner': case 'generator': addTo(b.fuel, item, n); break;
       case 'assembler': case 'lab': case 'chest': addTo(b.inv, item, n); break;
       case 'hub': addTo(S.hub, item, n); break;
-      case 'splitter': case 'sorter': b.buf = item; break;
+      case 'splitter': case 'sorter': case 'splitter2': b.buf = item; break;
+      case 'merger': { const i = b.ins.indexOf(null); if (i >= 0) b.ins[i] = item; break; }
     }
   }
   // 機械手臂可以從這個建築拿什麼（want(item) = 前面收不收）
   function provide(S, b, want) {
     const k = defOf(b).kind;
     if (k === 'chest') { for (const it in b.inv) if (want(it)) { takeFrom(b.inv, it, 1); return it; } return null; }
-    if (k === 'splitter' || k === 'sorter') { if (b.buf && want(b.buf)) { const it = b.buf; b.buf = null; return it; } return null; }
+    if (k === 'splitter' || k === 'sorter' || k === 'splitter2') { if (b.buf && want(b.buf)) { const it = b.buf; b.buf = null; return it; } return null; }
     if (b.out) { for (const it in b.out) if (want(it)) { takeFrom(b.out, it, 1); return it; } }
     return null;
   }
@@ -495,7 +549,11 @@
     // ---- 4. 機械手臂 ----
     for (const b of list) if (defOf(b).kind === 'inserter') stepInserter(S, tp, b);
     // ---- 5. 分流器 / 分類器 ----
-    for (const b of list) { const k = defOf(b).kind; if ((k === 'splitter' || k === 'sorter') && b.buf) stepSplitter(S, tp, b, k); }
+    for (const b of list) {
+      const k = defOf(b).kind;
+      if ((k === 'splitter' || k === 'sorter' || k === 'splitter2') && b.buf) stepSplitter(S, tp, b, k);
+      else if (k === 'merger') stepMerger(S, tp, b);
+    }
     // ---- 6. 輸送帶（下游先算）----
     for (const b of tp.belts) stepBelt(S, tp, b);
     return notes;
@@ -554,6 +612,7 @@
     if (!e) return false;
     if (e.mode === 'belt') return beltInsert(e.t, item, e.p, e.f);
     if (e.mode === 'split') { if (e.t.buf) return false; e.t.buf = item; return true; }
+    if (e.mode === 'merge') { if (e.t.ins[e.slot]) return false; e.t.ins[e.slot] = item; return true; }
     if (canAccept(S, e.t, item)) { put(S, e.t, item, 1); return true; }
     return false;
   }
@@ -561,11 +620,21 @@
     const outs = tp.front.get(b.id);   // [前, 左, 右]
     let order;
     if (k === 'sorter') order = b.flt && b.buf === b.flt ? [0] : [1, 2];
+    else if (k === 'splitter2') order = [0, 1];
     else order = [0, 1, 2];
     const n = order.length;
     for (let j = 0; j < n; j++) {
       const idx = order[(b.rr + j) % n];
       if (sendTo(S, outs[idx], b.buf)) { b.buf = null; b.rr = (b.rr + j + 1) % 1000000; return; }
+    }
+  }
+  // 二合一：三個入口輪流（從上次送出的下一個開始找），每 Tick 送出 1 個，所以兩條輸送帶會公平地各占一半
+  function stepMerger(S, tp, b) {
+    const out = tp.front.get(b.id);
+    if (!out) return;
+    for (let j = 0; j < 3; j++) {
+      const idx = (b.rr + j) % 3;
+      if (b.ins[idx] && sendTo(S, out, b.ins[idx])) { b.ins[idx] = null; b.rr = (idx + 1) % 3; return; }
     }
   }
   // 機械手臂：ph 0 = 空手等待；抓到後 ph 往上加到 cycle/2 放下，再回到 0
@@ -650,6 +719,7 @@
     if (b.items) for (const o of b.items) addTo(out, o.i, 1);
     if (b.h) addTo(out, b.h, 1);
     if (b.buf) addTo(out, b.buf, 1);
+    if (b.ins) for (const it of b.ins) if (it) addTo(out, it, 1);
     // 研究站已裝填的那組研究包算用掉了，不退
     return out;
   }
@@ -691,8 +761,7 @@
       for (const b of S.b.values()) if (b.node) claimed.add(b.node);
       const n = inside.find((nn) => !claimed.has(nn.id));
       if (!n) return { ok: false, error: inside.length ? '這個資源已經有採礦機了' : '採礦機要蓋在領地裡的資源上（樹木、石頭、礦脈）' };
-      const nt = SfResources.NODE_TYPES[n.type];
-      return { ok: true, node: n.id, res: nt ? nt.item : null };
+      return { ok: true, node: n.id, res: SfResources.nodeItem(n, ctx.cfg) };   // 礦物礦脈依位置決定產出
     }
     if (inside.length) return { ok: false, error: '這裡有資源擋著（只有採礦機可以蓋在資源上）' };
     return { ok: true };
@@ -701,7 +770,7 @@
   // ============================================================
   // 打包 / 還原：存資料庫、送給前端的完整狀態（JSON 可序列化；數字原樣保留，前後端還原後完全相同）
   // ============================================================
-  const PACK_KEYS = ['inv', 'out', 'fuel', 'en', 'w', 'r', 'flt', 'res', 'node', 'h', 'ph', 'buf', 'rr', 'ld'];
+  const PACK_KEYS = ['inv', 'out', 'fuel', 'en', 'w', 'r', 'flt', 'res', 'node', 'h', 'ph', 'buf', 'rr', 'ld', 'ins'];
   function pack(S) {
     const bl = [];
     for (const b of S.b.values()) {
