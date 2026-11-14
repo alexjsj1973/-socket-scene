@@ -42,6 +42,45 @@
     gold_ore:     { name: '金礦石', icon: '🟡' },
     flower:       { name: '花朵',   icon: '🌸' }      // 2026-11-04 新增
   };
+
+  // ---- 礦物（2026-11-14 新增）：「礦物礦脈」（NODE_TYPES.mineral）依位置固定是其中一種，採到的就是那種礦物 ----
+  //   代碼 = assets/sunnyside/ore 的圖檔名（xxx_l / _m / _s），物品圖示用 _m；w = 預設出現權重（越大越常見）
+  //   鐵、銅、鋁、銀、金已經有自己的礦脈（iron_ore …），不重複列。後台品種比例：inc/inc_sf_settings.asp 的 SF_SPECIES("mineral")，
+  //   代碼與預設權重要跟這裡一致，改一邊就要改另一邊。代碼發出去後不要刪（背包、資料庫裡會有）。
+  const MINERALS = {
+    basalt:     { name: '玄武岩', w: 12 }, granite:    { name: '花崗岩', w: 12 }, sandstone:  { name: '砂岩',   w: 12 },
+    shale:      { name: '頁岩',   w: 12 }, quartz:     { name: '石英',   w: 10 }, calcite:    { name: '方解石', w: 10 },
+    dolomite:   { name: '白雲石', w: 10 }, feldspar:   { name: '長石',   w: 10 }, gypsum:     { name: '石膏',   w: 10 },
+    marble:     { name: '大理石', w: 10 }, mica:       { name: '雲母',   w: 9 },  barite:     { name: '重晶石', w: 8 },
+    hematite:   { name: '赤鐵礦', w: 8 },  pyrite:     { name: '黃鐵礦', w: 8 },  lead:       { name: '鉛礦',   w: 7 },
+    magnetite:  { name: '磁鐵礦', w: 7 },  agate:      { name: '瑪瑙',   w: 6 },  azurite:    { name: '藍銅礦', w: 6 },
+    fluorite:   { name: '螢石',   w: 6 },  serpentine: { name: '蛇紋石', w: 6 },  tin:        { name: '錫礦',   w: 6 },
+    zinc:       { name: '鋅礦',   w: 6 },  malachite:  { name: '孔雀石', w: 5 },  nickel:     { name: '鎳礦',   w: 5 },
+    obsidian:   { name: '黑曜石', w: 5 },  olivine:    { name: '橄欖石', w: 5 },  crystal:    { name: '水晶',   w: 4 },
+    corundum:   { name: '剛玉',   w: 3 },  mercury:    { name: '汞礦',   w: 3 },  nephrite:   { name: '軟玉',   w: 3 },
+    titanium:   { name: '鈦礦',   w: 3 },  jade:       { name: '翡翠',   w: 2 },  opal:       { name: '蛋白石', w: 2 },
+    diamond:    { name: '鑽石',   w: 1 },  platinum:   { name: '鉑礦',   w: 1 }
+  };
+  Object.keys(MINERALS).forEach((k) => { ITEMS[k] = { name: MINERALS[k].name, icon: '💎', art: 'ore/' + k + '_m' }; });
+
+  // ---- 道具裝備（2026-11-14 新增）：32 種，與 assets/sunnyside/equipment/catalog.json 的 id 一致 ----
+  //   可以放進背包、存進資料庫（game_sf_inventory.ItemCode），要有才能拿在手上；用手動合成或組裝機做（配方在 factory.js 的 RECIPES）
+  //   cat = catalog.json 的分類（melee / ranged / magic / shield / tool）
+  const EQUIP_ICON = { melee: '⚔️', ranged: '🏹', magic: '🪄', shield: '🛡️', tool: '🔧' };
+  const EQUIPMENT = {
+    short_sword: { name: '旅行短劍', cat: 'melee' }, long_sword: { name: '騎士長劍', cat: 'melee' }, spear: { name: '巡林長槍', cat: 'melee' },
+    battle_axe: { name: '開拓戰斧', cat: 'melee' }, war_hammer: { name: '鍛鋼戰鎚', cat: 'melee' }, dagger: { name: '月牙匕首', cat: 'melee' },
+    bow: { name: '白樺獵弓', cat: 'ranged' }, crossbow: { name: '銅翼弩', cat: 'ranged' }, pistol: { name: '黃銅燧發槍', cat: 'ranged' },
+    rifle: { name: '木托巡守步槍', cat: 'ranged' }, boomerang: { name: '迴風飛旋鏢', cat: 'ranged' },
+    fire_staff: { name: '赤晶火焰杖', cat: 'magic' }, ice_staff: { name: '霜藍冰晶杖', cat: 'magic' }, lightning_wand: { name: '耀金雷光短杖', cat: 'magic' },
+    guardian_staff: { name: '碧光守護杖', cat: 'magic' }, healing_staff: { name: '翠葉治癒杖', cat: 'magic' }, grimoire: { name: '星紋魔導書', cat: 'magic' },
+    wood_shield: { name: '橡木圓盾', cat: 'shield' }, steel_shield: { name: '藍鋼塔盾', cat: 'shield' }, energy_shield: { name: '青曜能量盾', cat: 'shield' },
+    pickaxe: { name: '精鋼十字鎬', cat: 'tool' }, wood_axe: { name: '伐木斧', cat: 'tool' }, power_drill: { name: '電動採礦鑽', cat: 'tool' },
+    chainsaw: { name: '電動伐木鏈鋸', cat: 'tool' }, fishing_rod: { name: '溪畔釣竿', cat: 'tool' }, watering_can: { name: '暖銅澆水壺', cat: 'tool' },
+    shovel: { name: '園丁鐵鏟', cat: 'tool' }, hoe: { name: '拓荒鋤頭', cat: 'tool' }, sickle: { name: '彎月收割鐮', cat: 'tool' },
+    build_hammer: { name: '木匠建造鎚', cat: 'tool' }, repair_wrench: { name: '工程維修扳手', cat: 'tool' }, lantern: { name: '營地提燈', cat: 'tool' }
+  };
+  Object.keys(EQUIPMENT).forEach((k) => { ITEMS[k] = { name: EQUIPMENT[k].name, icon: EQUIP_ICON[EQUIPMENT[k].cat], art: 'equipment/icons/' + k, equip: EQUIPMENT[k].cat }; });
   // 資源種類：產出物品、名稱、喜歡的地形（plain 平原 / hill 丘陵；不夠時會放到另一種）、每恢復 1 單位需要的秒數
   // 代碼只能用小寫英文（會出現在節點代碼裡）；順序 = 後台表格的順序
   const NODE_TYPES = {
@@ -53,7 +92,9 @@
     aluminum: { item: 'aluminum_ore', name: '鋁礦', terrain: 'hill',  regenSec: 240 },
     silver:   { item: 'silver_ore',   name: '銀礦', terrain: 'hill',  regenSec: 420 },
     gold:     { item: 'gold_ore',     name: '金礦', terrain: 'hill',  regenSec: 600 },
-    flower:   { item: 'flower',       name: '花朵', terrain: 'plain', regenSec: 90 }    // 51 種花的外觀由前端依位置挑
+    flower:   { item: 'flower',       name: '花朵', terrain: 'plain', regenSec: 90 },   // 51 種花的外觀由前端依位置挑
+    // 礦物礦脈：item 是 null，實際產出 = mineralAt(位置)（MINERALS 其中一種），一律用 nodeItem() 取
+    mineral:  { item: null,           name: '礦物礦脈', terrain: 'hill', regenSec: 300 }   // 2026-11-14 新增
   };
   // 預設分佈（每隊領地）：count 個數、min～max 每個資源可採集的數量；wild = 野外每個區塊大約幾個（只能看、不能採）
   //   再生秒數的預設值是 NODE_TYPES 的 regenSec。後台可以改這些值（每個場次、每一版設定各自存），沒設定就用這裡的預設。
@@ -67,7 +108,8 @@
     aluminum: { count: 10, min: 6,  max: 12, wild: 0.5 },
     silver:   { count: 3,  min: 3,  max: 6,  wild: 0.35 },
     gold:     { count: 2,  min: 2,  max: 4,  wild: 0.2 },
-    flower:   { count: 20, min: 3,  max: 8,  wild: 42 }
+    flower:   { count: 20, min: 3,  max: 8,  wild: 42 },
+    mineral:  { count: 12, min: 3,  max: 8,  wild: 0.6 }
   };
   // 上下限（與 ASP 驗證、SQL CHECK 一致）
   const LIMITS = { countMax: 500, totalMax: 1000, amountMax: 999, regenMin: 5, regenMax: 86400, wildMax: 100, speciesMax: 100 };
@@ -75,7 +117,7 @@
   const GATHER_COOLDOWN = 900;  // 每次採集的間隔（毫秒）
   const PICKUP_RANGE = 1.5;     // 角色離地上物品多近才能撿（格）
   const STACK_MAX = 999;        // 每種物品最多帶多少
-  const BAG_KINDS = 40;         // 背包最多幾種物品（2026-11-13 加入工廠流水線後物品變多，20 → 40）
+  const BAG_KINDS = 100;        // 背包最多幾種物品（2026-11-13 工廠 20 → 40；2026-11-14 加入 35 種礦物、32 種道具 → 100）
   const TILES_PER_NODE = 6;     // 每個資源大約要佔幾格陸地（插旗時檢查領地放不放得下）
   const FLAG_CLEAR = 3;         // 旗子周圍幾格內不放資源（留給基地）
 
@@ -162,6 +204,25 @@
     return blocks.some((b) => b.cx === cx && b.cy === cy);
   }
 
-  return { ITEMS, NODE_TYPES, DEFAULT_SPAWN, LIMITS, GATHER_RANGE, GATHER_COOLDOWN, PICKUP_RANGE, STACK_MAX, BAG_KINDS,
+  // 礦物礦脈在這個位置是哪一種礦物：依整數座標雜湊、照品種權重挑（伺服器採集、採礦機、前端外觀共用，結果一定一樣）
+  //   cfg = normalizeConfig 的結果；後台有設品種比例（cfg.mineral.species）就用，沒有就用 MINERALS 的預設權重
+  const MINERAL_KEYS = Object.keys(MINERALS);
+  function mineralAt(x, y, cfg) {
+    const sp = cfg && cfg.mineral && cfg.mineral.species;
+    let total = 0;
+    const ws = MINERAL_KEYS.map((k) => { const w = sp && sp[k] != null ? Math.max(0, Number(sp[k]) || 0) : MINERALS[k].w; total += w; return w; });
+    if (total <= 0) return MINERAL_KEYS[0];
+    let r = SfTerrain.hash2(Math.floor(x), Math.floor(y), 7919) * total;
+    for (let i = 0; i < ws.length; i++) { r -= ws[i]; if (r < 0) return MINERAL_KEYS[i]; }
+    return MINERAL_KEYS[MINERAL_KEYS.length - 1];
+  }
+  // 採這個資源節點會得到什麼物品（礦物礦脈依位置，其他照 NODE_TYPES.item）
+  function nodeItem(node, cfg) {
+    const def = node && NODE_TYPES[node.type];
+    if (!def) return null;
+    return node.type === 'mineral' ? mineralAt(node.x, node.y, cfg) : def.item;
+  }
+
+  return { ITEMS, MINERALS, EQUIPMENT, NODE_TYPES, DEFAULT_SPAWN, mineralAt, nodeItem, LIMITS, GATHER_RANGE, GATHER_COOLDOWN, PICKUP_RANGE, STACK_MAX, BAG_KINDS,
            normalizeConfig, totalCount, wildDensities, currentAmount, landTiles, territoryResourceError, findSpot, inBlocks };
 });
