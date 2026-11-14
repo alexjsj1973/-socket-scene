@@ -213,7 +213,7 @@ module.exports = function createFactoryServer(ctx) {
       for (const n of w.nodes.values()) if (inside(n) && !claimed.has(n.id)) { next = n; break; }
       if (b.node) claimed.delete(b.node);
       if (next) claimed.add(next.id);
-      const res = next ? SfResources.NODE_TYPES[next.type].item : null;
+      const res = next ? SfResources.nodeItem(next, w.cfg) : null;   // 礦物礦脈依位置決定產出
       if ((next ? next.id : null) === b.node && res === b.res) continue;
       const ev = { k: 'miner', id: b.id, node: next ? next.id : null, res };
       if (silent) F.apply(f.S, ev); else emitEv(w, teamId, ev);
@@ -345,7 +345,7 @@ module.exports = function createFactoryServer(ctx) {
       const w = c.w, team = c.team;
       const nodes = [];
       for (const n of w.nodes.values()) if (n.active && n.teamId === team.id) nodes.push({ id: n.id, type: n.type, x: n.x, y: n.y });
-      const chk = F.checkPlace(c.f.S, { terrain: w.terrain, blocks: ctx.teamBlocks(team), nodes, flag: { x: team.flagX, y: team.flagY } }, type, x, y);
+      const chk = F.checkPlace(c.f.S, { terrain: w.terrain, blocks: ctx.teamBlocks(team), nodes, flag: { x: team.flagX, y: team.flagY }, cfg: w.cfg }, type, x, y);
       if (!chk.ok) return fail(chk.error);
       const cost = F.BUILDINGS[type].cost, lack = canPay(c.p, c.f, cost);
       if (lack) return fail('材料不夠：' + lack + '（背包和基地核心都沒有了）');
