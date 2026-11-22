@@ -40,7 +40,24 @@
     aluminum_ore: { name: '鋁礦石', icon: '🔘' },
     silver_ore:   { name: '銀礦石', icon: '⚪' },
     gold_ore:     { name: '金礦石', icon: '🟡' },
-    flower:       { name: '花朵',   icon: '🌸' }      // 2026-11-04 新增
+    flower:       { name: '花朵',   icon: '🌸' },     // 2026-11-04 新增
+    // 2026-11-22：打倒動物、怪物的掉落物品（掉落表在 creatures.js 的 loot；之後可以拿來做料理、裝備）
+    raw_meat:       { name: '生肉',       icon: '🍖' },
+    hide:           { name: '獸皮',       icon: '🟫' },
+    bone:           { name: '骨頭',       icon: '🦴' },
+    feather:        { name: '羽毛',       icon: '🪶' },
+    fish_meat:      { name: '魚肉',       icon: '🐟' },
+    whale_oil:      { name: '鯨油',       icon: '🛢️' },
+    turtle_shell:   { name: '龜殼',       icon: '🐢' },
+    slime_gel:      { name: '史萊姆凝膠', icon: '🟢' },
+    mushroom_cap:   { name: '蘑菇傘',     icon: '🍄' },
+    beetle_shell:   { name: '甲蟲殼',     icon: '🪲' },
+    frog_skin:      { name: '蛙皮',       icon: '🐸' },
+    saber_fang:     { name: '劍齒',       icon: '🦷' },
+    lava_scale:     { name: '熔岩鱗片',   icon: '🔥' },
+    mammoth_wool:   { name: '長毛',       icon: '🧶' },
+    spirit_essence: { name: '幽魂精華',   icon: '👻' },
+    totem_core:     { name: '圖騰核心',   icon: '🗿' }
   };
 
   // ---- 礦物（2026-11-14 新增）：「礦物礦脈」（NODE_TYPES.mineral）依位置固定是其中一種，採到的就是那種礦物 ----

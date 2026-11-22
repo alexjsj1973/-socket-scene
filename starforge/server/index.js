@@ -30,6 +30,9 @@
 //   * 背包：可以放棄（直接消失）或丟在地上；地上的物品任何人都能撿，10 分鐘沒人撿就消失（只放記憶體，重啟會清空）
 //   * 工廠流水線（2026-11-13）：factory-server.js（模擬在 factory.js，前後端共用）；這裡只在載入世界、插旗、採集、
 //     進場 / 離線、場次切換時呼叫它（搜尋 fac.）。設計見 docs/FACTORY_DESIGN.md
+//   * 戰鬥（2026-11-22）：combat.js（生物資料與漫遊在 creatures.js，前後端共用）。角色有血量、經驗值、等級；
+//     點動物 / 怪物走過去攻擊，怪物會主動追打、猛獸被打才還手、草食動物會逃；打倒給經驗值與掉落物品；
+//     角色倒下 5 秒後在隊伍旗子旁復活。倒下時不能移動、採集、撿東西。經驗值與等級寫回資料庫（act=saveexp）
 //   * 聊天：跟社群平台集會廣場同一套玩法（對話紀錄 + 頭上泡泡 + 進出世界的系統訊息），分「全體」與「隊伍」兩個頻道；
 //     紀錄只放記憶體（各留最近 CHAT_LOG_MAX 則），換場次或重啟就清空；隊伍頻道只送給同隊（Socket.io room team:<隊伍編號>）
 // 狀態只放在記憶體（Render 重啟會清空），需要保留的（旗子、位置）都寫進資料庫，
@@ -41,6 +44,7 @@ const SfResources = require('./resources');
 const SfWild = require('./wild');
 const createAspApi = require('./asp-api');
 const createFactoryServer = require('./factory-server');   // 工廠流水線（2026-11-13，設計見 docs/FACTORY_DESIGN.md）
+const createCombat = require('./combat');                  // 戰鬥（2026-11-22）：血量、攻擊、經驗值、掉落
 
 const TICK_MS = 100;                 // 伺服器移動模擬間隔
 const WALK_SPEED = 4;                // 走路速度（格 / 秒）
@@ -93,7 +97,8 @@ module.exports = function attachStarforge(opts) {
   const nsp = io.of('/starforge');
 
   // 瀏覽器用的地形程式（與伺服器同一份）；factory.js = 工廠流水線的模擬（前後端同一份，畫面才會跟伺服器一致）
-  ['terrain.js', 'resources.js', 'wild.js', 'factory.js'].forEach((f) => {
+  // creatures.js = 野生動物與怪物的資料、生成與漫遊（2026-11-22，前後端同一份，位置才會一致）
+  ['terrain.js', 'resources.js', 'wild.js', 'factory.js', 'creatures.js'].forEach((f) => {
     app.get('/starforge/' + f, (req, res) => {
       res.set('Cache-Control', 'public, max-age=300');
       res.sendFile(path.join(__dirname, f));
@@ -131,6 +136,15 @@ module.exports = function attachStarforge(opts) {
     teamBlocks: (team) => teamBlocks(team),
     sendChat: (msg) => sendChat(msg),
     dropAt: (item, qty, x, y) => dropAt(item, qty, x, y)
+  });
+  // ---- 戰鬥（combat.js）----
+  const combat = createCombat({
+    nsp, players, api,
+    getWorld: () => world,
+    obstacleFn: (w) => obstacleFn(w),
+    territorySet: (w) => territorySet(w),
+    dropAt: (item, qty, x, y, fx, fy) => dropAt(item, qty, x, y, fx, fy),
+    sendChat: (msg) => sendChat(msg)
   });
 
   async function loadWorld() {
@@ -276,7 +290,8 @@ module.exports = function attachStarforge(opts) {
     // 資源設定（含再生秒數、野外密度、品種權重）：野外密度改了就重建野外資源（擋路判斷跟著換）
     const oldWild = JSON.stringify(SfResources.wildDensities(w.cfg));
     w.cfg = SfResources.normalizeConfig(s.resources);
-    if (JSON.stringify(SfResources.wildDensities(w.cfg)) !== oldWild) w.wild = SfWild.create(w.terrain, SfResources.wildDensities(w.cfg));
+    if (JSON.stringify(SfResources.wildDensities(w.cfg)) !== oldWild) { w.wild = SfWild.create(w.terrain, SfResources.wildDensities(w.cfg)); combat.onWildChange(w); }
+    combat.onSessionUpdate(w);                   // 怪物密度 / 比例改了：之後生成的區塊用新設定
     if ((s.resourceEpoch || 0) !== (old.resourceEpoch || 0)) {
       // 後台已經刪掉舊的資源資料；這裡清掉記憶體（還沒存的也不要了）重新生成
       w.nodes.clear(); w.dirtyNodes.clear(); w.teamSpots.clear(); w.nodeVer++;
@@ -304,7 +319,8 @@ module.exports = function attachStarforge(opts) {
     });
   }
 
-  const publicPlayer = (p) => ({ id: p.charId, name: p.name, look: p.look, teamId: p.teamId, x: p.x, y: p.y, dir: p.dir, held: p.held || null });
+  const publicPlayer = (p) => ({ id: p.charId, name: p.name, look: p.look, teamId: p.teamId, x: p.x, y: p.y, dir: p.dir, held: p.held || null,
+                                 level: p.level, hp: Math.ceil(p.hp), maxHp: p.maxHp, dead: !!p.dead });   // 血量、等級（戰鬥，2026-11-22）
   const publicTeam = (t) => ({ id: t.id, name: t.name, level: t.level, flagX: t.flagX, flagY: t.flagY });
   const regenMult = () => (world && world.session.regenMultiplier) || 1;
   // 給前端的資源：[id, type, x, y, max, amount, changedMs]（只送顯示中的）
@@ -401,10 +417,11 @@ module.exports = function attachStarforge(opts) {
       });
     }
   }
-  setInterval(() => { flushNodes(); for (const p of players.values()) saveInv(p); }, FLUSH_EVERY_MS);
+  setInterval(() => { flushNodes(); for (const p of players.values()) { saveInv(p); combat.saveExp(p); } }, FLUSH_EVERY_MS);
 
   nsp.on('connection', (socket) => {
     fac.bind(socket);                            // 工廠操作：fac-build / fac-remove / fac-put / fac-take / craft …（factory-server.js）
+    combat.bind(socket);                         // 戰鬥：attack（combat.js）
     // ---- 進場 ----
     socket.on('join', async (data) => {
       try {
@@ -419,11 +436,14 @@ module.exports = function attachStarforge(opts) {
         if (!lookCode) return socket.emit('join-error', { error: '角色外觀已全面更新，請先回大廳重新捏角色', needLobby: true, needLook: true });
         const w = await ensureWorld(pr.sessionId);
 
-        // 同一個角色只能有一個連線：踢掉舊的
+        // 同一個角色只能有一個連線：踢掉舊的（舊連線的等級、經驗值比資料庫新，接著用）
+        let carried = null;
         for (const [sid, other] of players) {
           if (other.charId === pr.character.id) {
             const s = nsp.sockets.get(sid);
             if (s) { s.emit('join-error', { error: '你的角色已在其他視窗進入世界' }); s.disconnect(true); }
+            if (other.charId === pr.character.id) carried = { level: other.level, exp: other.exp };
+            combat.saveExp(other);
             players.delete(sid);
             nsp.emit('char-left', { id: other.charId });
           }
@@ -452,13 +472,14 @@ module.exports = function attachStarforge(opts) {
           inventory: {}, invDirty: false, lastGather: 0, lastItemOp: 0, lastLook: 0, held: null, lastHeld: 0, lastUse: 0, run: false, lastJump: 0
         };
         (pr.inventory || []).forEach((it) => { if (SfResources.ITEMS[it.code]) p.inventory[it.code] = it.qty; });
+        combat.initPlayer(p, carried ? carried.level : c.level, carried ? carried.exp : c.exp);    // 血量（滿血）、等級、經驗值
         players.set(socket.id, p);
         socket.data.charId = c.id;
         socket.join('team:' + team.id);           // 隊伍頻道聊天用
 
         const s = w.session;
         socket.emit('init', {
-          me: { id: c.id, name: c.name, level: c.level, teamId: team.id, isLeader: team.leaderId === c.id },
+          me: Object.assign({ id: c.id, name: c.name, teamId: team.id, isLeader: team.leaderId === c.id }, combat.statsOf(p)),   // 含 level、hp、maxHp、exp、need
           world: { id: s.id, name: s.name, seed: s.seed, mapChunks: s.mapChunks, chunk: SfTerrain.CHUNK,
                    initialBlocks: s.initialBlocks, minFlagDistance: s.minFlagDistance, teamSizeMax: s.teamSizeMax,
                    resources: s.resources || null },   // 資源分佈：前端插旗預覽時檢查領地放不放得下
@@ -470,7 +491,8 @@ module.exports = function attachStarforge(opts) {
           serverNow: Date.now(),
           regenMultiplier: regenMult(),
           inventory: p.inventory,
-          chatLog: chatLogFor(w, team.id)          // 最近的對話（全體 + 自己隊伍）
+          chatLog: chatLogFor(w, team.id),         // 最近的對話（全體 + 自己隊伍）
+          combat: combat.snapshot(w)               // 戰鬥中的生物、倒下還沒重新出現的生物
         });
         socket.broadcast.emit('char-joined', publicPlayer(p));
         systemChat(p.name + ' 進入了世界');
@@ -484,7 +506,7 @@ module.exports = function attachStarforge(opts) {
     // ---- 移動：只收目的地，伺服器檢查並模擬 ----
     socket.on('move', (data) => {
       const p = players.get(socket.id);
-      if (!p || !world || !data) return;
+      if (!p || !world || !data || p.dead) return;         // 倒下時不能動
       let x = Number(data.x), y = Number(data.y);
       if (!Number.isFinite(x) || !Number.isFinite(y)) return;
       const size = world.terrain.size;
@@ -533,7 +555,7 @@ module.exports = function attachStarforge(opts) {
     // ---- 採集：一次採 1 單位；前端走到節點旁後每隔一段時間送一次 ----
     socket.on('gather', (data) => {
       const p = players.get(socket.id);
-      if (!p || !world || !data) return;
+      if (!p || !world || !data || p.dead) return;
       const R = SfResources, now = Date.now();
       const node = world.nodes.get(String(data.nodeId || ''));
       if (!node || !node.active) return socket.emit('gather-error', { error: '這個資源已經不在了', stop: true });
@@ -614,7 +636,7 @@ module.exports = function attachStarforge(opts) {
     });
     socket.on('pickup', (data) => {
       const p = players.get(socket.id);
-      if (!p || !world || !data || !itemOpOk(p)) return;
+      if (!p || !world || !data || p.dead || !itemOpOk(p)) return;
       const R = SfResources, d = world.drops.get(String(data.dropId || ''));
       if (!d) return socket.emit('item-error', { error: '東西已經被撿走了', stop: true });
       if (Math.hypot(d.x - p.x, d.y - p.y) > R.PICKUP_RANGE + 0.4) return socket.emit('item-error', { error: '離太遠了', far: true });
@@ -700,6 +722,7 @@ module.exports = function attachStarforge(opts) {
       fac.onLeave(p);                            // 手動合成還沒做完的退回背包（要在存背包之前）
       savePos(p);
       saveInv(p);
+      combat.saveExp(p);
       nsp.emit('char-left', { id: p.charId });
       // 被同角色的新連線踢掉時 players 已經先刪掉了，不會走到這裡，所以不會多一則「離開」
       systemChat(p.name + ' 離開了世界');

@@ -53,6 +53,8 @@ module.exports = function createAspApi(baseUrl, apiKey) {
     // 存一隊的工廠：ver 要比資料庫裡的大才會寫入（舊資料不會蓋掉新資料），失敗時回 { staleVersion:true, ver }
     saveFactory: (teamId, ver, savedMs, data) => request('POST', { act: 'savefactory', teamId, ver, savedMs, data }),
     // 里程碑完成後更新隊伍等級
-    teamLevel: (teamId, level) => request('POST', { act: 'teamlevel', teamId, level })
+    teamLevel: (teamId, level) => request('POST', { act: 'teamlevel', teamId, level }),
+    // 戰鬥（2026-11-22）：角色等級與經驗值（打倒動物、怪物得到的）
+    saveExp: (charId, level, exp) => request('POST', { act: 'saveexp', charId, level, exp })
   };
 };
