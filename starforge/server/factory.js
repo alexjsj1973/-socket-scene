@@ -28,6 +28,9 @@
   const TICK_MS = 100;            // 每個 Tick 100 毫秒（每秒 10 次），前後端一致
   const BELT_L = 120;             // 輸送帶一格的長度（內部單位）
   const BELT_GAP = 30;            // 物品之間至少間隔（一格最多 4 個）
+  const INS_REACH = 0.16;         // 機械手臂從輸送帶抓物品：物品要在「抓取點」這個距離（格）內（2026-11-22）
+                                  //   抓取點 = 輸送帶朝手臂流（或從手臂這邊流出）時是兩格交界；橫向經過時是那格輸送帶的中心
+  const INS_REACH_SIDE = 0.34;    // 橫向經過時範圍放寬（中間約 0.7 格），手臂才來得及抓
   const DIRS = [[1, 0], [0, 1], [-1, 0], [0, -1]];   // 0 東（右）、1 南（下）、2 西（左）、3 北（上），順時針
   const DIR_NAMES = ['→', '↓', '←', '↑'];
   const MAX_BUILDINGS = 1500;     // 每隊最多幾個建築（存檔大小與伺服器負載的上限）
@@ -340,14 +343,29 @@
     return S.topo;
   }
 
+  // ---- 輸送帶上位置 p 的世界座標（格；與前端 sf-factory.js 的 beltPoint 相同）：進入邊 → 中心 → 出口邊 ----
+  function beltItemPos(b, p, f) {
+    const cx = b.x + 0.5, cy = b.y + 0.5, half = BELT_L / 2;
+    if (p >= half || f < 0) {
+      const k = Math.max(0, (p - half) / half) * 0.5;
+      return [cx + DIRS[b.d][0] * k, cy + DIRS[b.d][1] * k];
+    }
+    const k = (1 - p / half) * 0.5;
+    return [cx + DIRS[f][0] * k, cy + DIRS[f][1] * k];
+  }
+  let curTick = -1;               // 目前正在算的 Tick（beltInsert 標記用）
+
   // ---- 輸送帶插入：位置 p 前後 BELT_GAP 內沒有其他物品才放得進去 ----
   function beltRoom(b, p) {
     for (const o of b.items) if (Math.abs(o.p - p) < BELT_GAP) return false;
     return true;
   }
-  function beltInsert(b, item, p, f) {
+  // q = 上一個 Tick 的位置（只給畫面補間用，不影響模擬）。從上一條輸送帶接過來的物品傳入 q（可以是負的，
+  //   代表還在交界的另一邊），畫面才會連續滑過交界，不會在接縫停頓一下（2026-11-22）
+  // n = 放上來的 Tick：同一個 Tick 內如果又輪到這條輸送帶，stepBelt 不會把 q 蓋掉
+  function beltInsert(b, item, p, f, q) {
     if (!beltRoom(b, p)) return false;
-    const o = { i: item, p, f, q: p };
+    const o = { i: item, p, f, q: q != null ? q : p, n: curTick };
     let k = 0;
     while (k < b.items.length && b.items[k].p > p) k++;
     b.items.splice(k, 0, o);
@@ -458,6 +476,7 @@
   function step(S) {
     const tp = topo(S), notes = [];
     S.tick++;
+    curTick = S.tick;
     const list = Array.from(S.b.values());
     // ---- 1. 電力：先算誰想用電（有材料、有空間），再看供給 ----
     let demand = 0, solarS = 0, genS = 0;
@@ -592,25 +611,26 @@
     let maxP = BELT_L, moved = false;
     for (let k = 0; k < it.length; k++) {
       const o = it[k];
-      o.q = o.p;
+      if (o.n !== curTick) o.q = o.p;      // 這個 Tick 才接過來的物品保留交界另一邊的 q
       let np = Math.min(o.p + sp, maxP);
       if (np < o.p) np = o.p;
       o.p = np;
-      if (k === 0 && !moved && o.p >= BELT_L && deliver(S, tp, b, o.i)) {
+      if (k === 0 && !moved && o.p >= BELT_L && deliver(S, tp, b, o)) {
         it.shift(); k--; moved = true; maxP = BELT_L - 0.001;   // 同一 Tick 只交出一個
         continue;
       }
       maxP = o.p - BELT_GAP;
     }
   }
-  function deliver(S, tp, b, item) {
+  function deliver(S, tp, b, o) {
     const e = tp.front.get(b.id);
-    return sendTo(S, e, item);
+    // 交到下一條輸送帶：q = 這個 Tick 開始時它在新輸送帶座標上的位置（交界前 BELT_L - o.q 單位，所以是負的）
+    return sendTo(S, e, o.i, o.q - BELT_L);
   }
-  // 把一個物品送給 entry() 算出來的目標
-  function sendTo(S, e, item) {
+  // 把一個物品送給 entry() 算出來的目標（vq = 接到輸送帶時給畫面用的起點，可省略）
+  function sendTo(S, e, item, vq) {
     if (!e) return false;
-    if (e.mode === 'belt') return beltInsert(e.t, item, e.p, e.f);
+    if (e.mode === 'belt') return beltInsert(e.t, item, e.p, e.f, vq);
     if (e.mode === 'split') { if (e.t.buf) return false; e.t.buf = item; return true; }
     if (e.mode === 'merge') { if (e.t.ins[e.slot]) return false; e.t.ins[e.slot] = item; return true; }
     if (canAccept(S, e.t, item)) { put(S, e.t, item, 1); return true; }
@@ -651,7 +671,19 @@
       const bk = defOf(bt).kind;
       let got = null;
       if (bk === 'belt') {
-        for (let k = 0; k < bt.items.length; k++) if (want(bt.items[k].i)) { got = bt.items[k].i; bt.items.splice(k, 1); break; }
+        // 只抓已經送到手臂抓取點的物品（INS_REACH 格內），有好幾個就抓最近的（2026-11-22）
+        //   以前會抓輸送帶上任何位置的物品，物品從輸送帶另一頭瞬間跑到手上；現在要等物品到了才抓
+        const along = bt.d === b.d || bt.d === ((b.d + 2) & 3);
+        const hx = along ? b.x + 0.5 - DIRS[b.d][0] * 0.5 : bt.x + 0.5, hy = along ? b.y + 0.5 - DIRS[b.d][1] * 0.5 : bt.y + 0.5;
+        const reach = along ? INS_REACH : INS_REACH_SIDE;
+        let best = -1, bestD = reach * reach;
+        for (let k = 0; k < bt.items.length; k++) {
+          const o = bt.items[k];
+          if (!want(o.i)) continue;
+          const [ix, iy] = beltItemPos(bt, o.p, o.f), d2 = (ix - hx) * (ix - hx) + (iy - hy) * (iy - hy);
+          if (d2 <= bestD + 1e-9 && (best < 0 || d2 < bestD - 1e-9)) { best = k; bestD = d2; }
+        }
+        if (best >= 0) { got = bt.items[best].i; bt.items.splice(best, 1); }
       } else if (bk !== 'hub' && bk !== 'inserter') got = provide(S, bt, want);
       if (got) { b.h = got; b.ph = 1; b.st = 'ok'; } else b.st = 'idle';
       return;
