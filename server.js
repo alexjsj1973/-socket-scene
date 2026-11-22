@@ -2337,6 +2337,76 @@ io.on('connection', (socket) => {
 // ---------------------------------------------------------------
 require('./starforge/server')({ io, app, verifyLoginToken, verifyTokenUrl: VERIFY_TOKEN_URL, apiKey: VERIFY_API_KEY });
 
+// ---------------------------------------------------------------
+// 智慧工廠大亨 Factory Tycoon：定時推進遊戲時間（factory/docs/DESIGN.md 3.2）
+// 做什麼：每 FT_TICK_MS 毫秒（預設 5 秒）POST 一次 factory/api_internal_tick.asp，
+//   由 SQL 預存程序 game_ft_sp_TickDue 挑落後最多的公司推進遊戲時間（生產、到貨、送達、薪資、事件…）。
+// 為什麼放這裡：ASP 主機沒有排程器；Render 這台本來就 24 小時在跑。
+//   Render 沒在跑時，玩家打開遊戲畫面也會在 api_game.asp?act=status 補算，不會卡住。
+// 上一個請求還沒回來就跳過這一輪（不會疊加）；逾時 25 秒。
+// 設定（環境變數）：FT_TICK_URL、FT_TICK_KEY（預設沿用 VERIFY_API_KEY）、FT_TICK_MS、FT_TICK_ENABLED=0 可關閉。
+// ---------------------------------------------------------------
+const FT_TICK_URL = process.env.FT_TICK_URL || 'https://www.swimlife.tw/alex/game/online/factory/api_internal_tick.asp';
+const FT_TICK_KEY = process.env.FT_TICK_KEY || VERIFY_API_KEY;
+const FT_TICK_MS = Math.max(2000, parseInt(process.env.FT_TICK_MS || '5000', 10) || 5000);
+const FT_TICK_ENABLED = (process.env.FT_TICK_ENABLED || '1') !== '0';
+const ftTick = { inflight: false, ok: 0, fail: 0, lastError: '', lastLogAt: 0, last: null };
+
+function factoryTickOnce() {
+  if (ftTick.inflight) return;
+  ftTick.inflight = true;
+  const body = 'key=' + encodeURIComponent(FT_TICK_KEY);
+  let done = false;
+  const finish = (err, data) => {
+    if (done) return;
+    done = true;
+    ftTick.inflight = false;
+    if (err) {
+      ftTick.fail++;
+      ftTick.lastError = String(err.message || err);
+      // 失敗時每 5 分鐘最多記一次 log，避免洗版
+      if (Date.now() - ftTick.lastLogAt > 300000) {
+        ftTick.lastLogAt = Date.now();
+        console.warn('[factory-tick] 失敗：', ftTick.lastError, `（累計成功 ${ftTick.ok}、失敗 ${ftTick.fail}）`);
+      }
+      return;
+    }
+    ftTick.ok++;
+    ftTick.last = data;
+  };
+  try {
+    const u = new URL(FT_TICK_URL);
+    const req = https.request({
+      hostname: u.hostname, port: u.port || 443, path: u.pathname + u.search, method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Content-Length': Buffer.byteLength(body) },
+      timeout: 25000
+    }, (res) => {
+      let raw = '';
+      res.setEncoding('utf8');
+      res.on('data', (c) => { if (raw.length < 4096) raw += c; });
+      res.on('end', () => {
+        try {
+          const j = JSON.parse(raw);
+          if (j && j.ok) finish(null, j);
+          else finish(new Error((j && j.error) || ('HTTP ' + res.statusCode)));
+        } catch (e) {
+          finish(new Error('回應不是 JSON（HTTP ' + res.statusCode + '）'));
+        }
+      });
+    });
+    req.on('timeout', () => { req.destroy(new Error('逾時')); });
+    req.on('error', (e) => finish(e));
+    req.write(body);
+    req.end();
+  } catch (e) {
+    finish(e);
+  }
+}
+if (FT_TICK_ENABLED) {
+  setInterval(factoryTickOnce, FT_TICK_MS);
+  console.log(`[factory-tick] 啟用：每 ${FT_TICK_MS} ms 呼叫 ${FT_TICK_URL}`);
+}
+
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
   console.log(`✅ 伺服器已啟動： http://localhost:${PORT}`);
