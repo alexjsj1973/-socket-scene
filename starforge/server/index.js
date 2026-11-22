@@ -176,15 +176,23 @@ module.exports = function attachStarforge(opts) {
              amount: Number(amount), t: Number(t), active: !!Number(active) };
   }
   // 某隊領地裡的空地（洗牌後快取；旗子不會換，所以同一隊一直用同一份）
+  //   2026-11-22 礦區：sp.patches = 每種資源的礦區中心（resources.js 的 planPatches），新資源放在礦區裡；
+  //   中心依「隊伍 + 旗子 + 資源 epoch」固定（重啟後一樣，重置資源會換一組），每種要開幾片跟著後台數量走（數量變了才重新規劃）
+  //   sp.blocked = 工廠建築佔的格子（每次放資源前更新，新資源不會長在輸送帶、機器底下）
   function teamSpots(w, team) {
-    const key = team.flagX + ',' + team.flagY;
+    const cfg = SfResources.normalizeConfig(w.session.resources), epoch = w.session.resourceEpoch || 0;
+    const key = team.flagX + ',' + team.flagY + '|' + epoch + '|' + JSON.stringify(SfResources.patchCounts(cfg));
     let sp = w.teamSpots.get(team.id);
-    if (sp && sp.key === key) return sp;
-    const blocks = SfTerrain.initialTerritory(team.flagX, team.flagY, w.session.initialBlocks, w.session.mapChunks);
-    sp = Object.assign({ key }, SfResources.landTiles(w.terrain, blocks, team.flagX, team.flagY));
-    const shuffle = (a) => { for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); const t = a[i]; a[i] = a[j]; a[j] = t; } };
-    shuffle(sp.plains); shuffle(sp.hills);
-    w.teamSpots.set(team.id, sp);
+    if (!sp || sp.key !== key) {
+      const blocks = SfTerrain.initialTerritory(team.flagX, team.flagY, w.session.initialBlocks, w.session.mapChunks);
+      sp = Object.assign({ key }, SfResources.landTiles(w.terrain, blocks, team.flagX, team.flagY));
+      const shuffle = (a) => { for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); const t = a[i]; a[i] = a[j]; a[j] = t; } };
+      shuffle(sp.plains); shuffle(sp.hills);
+      const seed = Math.floor(SfTerrain.hash2(team.id, Math.floor(team.flagX) * 4096 + Math.floor(team.flagY), epoch + 1) * 1e9);
+      sp.patches = SfResources.planPatches(sp, cfg, seed, fac.buildingTiles(w, team.id));
+      w.teamSpots.set(team.id, sp);
+    }
+    sp.blocked = fac.buildingTiles(w, team.id);
     return sp;
   }
   // 讓某隊領地裡的資源數量符合目前設定；回傳有變動的資源（呼叫端負責廣播）
@@ -202,14 +210,17 @@ module.exports = function attachStarforge(opts) {
     // 被佔用的位置：同隊所有資源（含隱藏的）；原本的位置也算，才不會搬回同一格
     const occupied = new Set();
     for (const m of w.nodes.values()) if (m.teamId === n.teamId) occupied.add(Math.floor(m.x) + ',' + Math.floor(m.y));
-    // 空位清單是洗牌過的固定順序，每次從不同位置開始找，資源才會散開，不會老是搬到同一區
-    const sp = teamSpots(w, team), rot = (a) => { const k = Math.floor(Math.random() * (a.length || 1)); return a.slice(k).concat(a.slice(0, k)); };
-    const spot = SfResources.findSpot({ plains: rot(sp.plains), hills: rot(sp.hills) }, occupied, n.type);
+    // 搬到同一片礦區裡的另一個空位（從最近的幾個空位隨機挑，才不會老是搬回同一格）；沒有礦區時照舊散布
+    const sp = teamSpots(w, team);
+    const spot = SfResources.findSpot(sp, occupied, n.type, { spread: 4 });
     if (!spot) return false;
-    n.x = spot[0] + 0.5; n.y = spot[1] + 0.5;
+    [n.x, n.y] = spotPos(spot);
     w.nodeVer++;
     return true;
   }
+  // 空地格子 → 資源位置：格子中心再錯開一點點（±0.2 格，依座標固定），礦區看起來才不會排得像棋盤；不會跑出那一格
+  const spotPos = (spot) => [+(spot[0] + 0.5 + (SfTerrain.hash2(spot[0], spot[1], 4241) - 0.5) * 0.4).toFixed(2),
+                             +(spot[1] + 0.5 + (SfTerrain.hash2(spot[0], spot[1], 7717) - 0.5) * 0.4).toFixed(2)];
   function syncTeamNodes(w, team) {
     if (!w || !team || team.flagX == null) return [];
     const cfg = SfResources.normalizeConfig(w.session.resources);
@@ -232,7 +243,7 @@ module.exports = function attachStarforge(opts) {
         occupied.add(spot[0] + ',' + spot[1]);
         const c = cfg[type], max = c.min + Math.floor(Math.random() * (c.max - c.min + 1));
         const n = { id: 't' + team.id + '_' + type + '_' + nextIdx, teamId: team.id, type, idx: nextIdx,
-                    x: spot[0] + 0.5, y: spot[1] + 0.5, max, amount: max, t: now, active: true };
+                    x: spotPos(spot)[0], y: spotPos(spot)[1], max, amount: max, t: now, active: true };
         nextIdx++; active++;
         w.nodes.set(n.id, n);
         changed.push(n);

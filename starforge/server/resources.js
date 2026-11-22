@@ -207,7 +207,36 @@
   // 伺服器用：找一個空位放新資源。
   //   spots = landTiles 的結果（呼叫端先洗牌、快取）；occupied = Set('x,y')（這隊所有資源，含隱藏的）
   //   先找喜歡的地形、彼此至少隔 3 格（曼哈頓距離），找不到再找另一種地形，最後放寬成隔 2 格；都沒有回 null
-  function findSpot(spots, occupied, type) {
+  //   2026-11-22：spots.patches（planPatches 的結果）有這種資源的中心時，改放在礦區裡（離中心最近的空位）；
+  //   opts.spread = 從最近的幾個空位裡隨機挑一個（採光搬家用，才不會老是搬回同一格）；spots.blocked = 工廠建築佔的格子
+  function findSpot(spots, occupied, type, opts) {
+    const centers = spots.patches && spots.patches[type];
+    if (centers && centers.length) {
+      const gap = patchOf(type).gap, blocked = spots.blocked;
+      // 候選空地依「離最近的中心多遠」排好（每種資源排一次，快取在 spots 上）
+      const key = '_sorted_' + type;
+      if (!spots[key]) {
+        spots[key] = spots.plains.concat(spots.hills).map(([x, y]) => [x, y, Math.min(...centers.map((c) => Math.hypot(c[0] - x, c[1] - y)))])
+          .sort((a, b) => a[2] - b[2] || a[1] - b[1] || a[0] - b[0]);
+      }
+      const ok = (x, y) => {
+        if (blocked) for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) if (blocked.has((x + dx) + ',' + (y + dy))) return false;
+        for (let dy = -gap; dy <= gap; dy++) for (let dx = -gap; dx <= gap; dx++) {
+          if (dx * dx + dy * dy < gap * gap - 0.01 && occupied.has((x + dx) + ',' + (y + dy))) return false;
+        }
+        return true;
+      };
+      const found = [], want = opts && opts.spread ? opts.spread : 1;
+      for (const [x, y, d] of spots[key]) {
+        if (!ok(x, y)) continue;
+        found.push([x, y]);
+        if (found.length >= want || d > 24) break;
+      }
+      if (found.length) return found[Math.floor(Math.random() * found.length)];
+    }
+    return findSpotScatter(spots, occupied, type);
+  }
+  function findSpotScatter(spots, occupied, type) {
     const pref = NODE_TYPES[type] && NODE_TYPES[type].terrain === 'plain' ? [spots.plains, spots.hills] : [spots.hills, spots.plains];
     const free = (x, y, gap) => {
       for (let dy = -(gap - 1); dy <= gap - 1; dy++) for (let dx = -(gap - 1); dx <= gap - 1; dx++) {
@@ -216,9 +245,68 @@
       return true;
     };
     for (const gap of [3, 2]) for (const list of pref) {
-      for (const [x, y] of list) if (free(x, y, gap)) return [x, y];
+      for (const [x, y] of list) if (free(x, y, gap) && !(spots.blocked && spots.blocked.has(x + ',' + y))) return [x, y];
     }
     return null;
+  }
+
+  // ---- 礦區（2026-11-22）：同種資源在領地裡聚成一片（礦石一片礦區、樹木成林、花朵成花田）----
+  //   做法：插旗後依「隊伍 + 旗子位置 + 資源 epoch」雜湊，替每種資源挑幾個「中心」（彼此隔開、周圍陸地夠多、避開工廠建築），
+  //   新長的資源一律放在離自己種類中心最近、還沒被佔用的空地；採光搬家也搬到同一片礦區裡的另一個空位。
+  //   per = 每一片大約放幾個（數量超過就多開一片）；gap = 同一片裡彼此最近的距離（格）：
+  //   礦石、樹木佔地半徑約 1 格，間隔 3 格角色才走得進去、每一顆都站得到旁邊採；花朵小，間隔 2 格。
+  //   中心與擺放順序都是固定的雜湊，遊戲服務重啟後一樣；管理員按「重置所有資源」（epoch + 1）會換一組新的礦區位置。
+  const PATCH = {
+    tree: { per: 15, gap: 3 }, flower: { per: 12, gap: 2 }, rock: { per: 12, gap: 3 }, iron: { per: 10, gap: 3 },
+    copper: { per: 10, gap: 3 }, coal: { per: 10, gap: 3 }, aluminum: { per: 10, gap: 3 }, silver: { per: 6, gap: 3 },
+    gold: { per: 6, gap: 3 }, mineral: { per: 8, gap: 3 }
+  };
+  const PATCH_SEP = [10, 7, 4];       // 兩片礦區中心至少隔幾格（找不到就逐步放寬）
+  const PATCH_ROOM = 4;               // 中心周圍這個半徑內要有夠多可用的陸地
+  const patchOf = (type) => PATCH[type] || { per: 10, gap: 3 };
+  // 每種資源要開幾片：cfg = normalizeConfig 的結果
+  function patchCounts(cfg) {
+    const o = {};
+    for (const type of Object.keys(NODE_TYPES)) { const c = cfg && cfg[type] ? cfg[type].count : 0; o[type] = c > 0 ? Math.ceil(c / patchOf(type).per) : 0; }
+    return o;
+  }
+  // 規劃礦區中心：spots = landTiles 的結果；blocked = Set('x,y')（工廠建築）；回傳 { 種類: [[x, y], ...] }
+  function planPatches(spots, cfg, seed, blocked) {
+    const land = new Set(), counts = patchCounts(cfg), out = {}, centers = [];
+    for (const [x, y] of spots.plains) land.add(x + ',' + y);
+    for (const [x, y] of spots.hills) land.add(x + ',' + y);
+    const usable = (x, y) => land.has(x + ',' + y) && !(blocked && blocked.has(x + ',' + y));
+    const roomy = (x, y) => {                // 周圍可用陸地的比例
+      let n = 0, all = 0;
+      for (let dy = -PATCH_ROOM; dy <= PATCH_ROOM; dy++) for (let dx = -PATCH_ROOM; dx <= PATCH_ROOM; dx++) {
+        if (dx * dx + dy * dy > PATCH_ROOM * PATCH_ROOM) continue;
+        all++; if (usable(x + dx, y + dy)) n++;
+      }
+      return n / all;
+    };
+    // 固定順序的洗牌（同一個 seed 結果一樣）
+    const order = (list, salt) => list.map((t) => [SfTerrain.hash2(t[0] * 7 + salt, t[1] * 13, seed), t]).sort((a, b) => a[0] - b[0] || a[1][1] - b[1][1] || a[1][0] - b[1][0]).map((e) => e[1]);   // 只看座標（清單本身是洗牌過的）
+    // 需要開比較多片的先挑（大片的比較需要空間）
+    const types = Object.keys(NODE_TYPES).filter((t) => counts[t] > 0).sort((a, b) => counts[b] - counts[a]);
+    types.forEach((type, ti) => {
+      out[type] = [];
+      const pref = NODE_TYPES[type].terrain === 'plain' ? [spots.plains, spots.hills] : [spots.hills, spots.plains];
+      const cands = order(pref[0], ti * 31 + 1).concat(order(pref[1], ti * 31 + 2));
+      for (let k = 0; k < counts[type]; k++) {
+        let pick = null;
+        for (const sep of PATCH_SEP) {
+          for (const [x, y] of cands) {
+            if (!usable(x, y) || roomy(x, y) < 0.7) continue;
+            if (centers.some((c) => Math.hypot(c[0] - x, c[1] - y) < sep)) continue;
+            pick = [x, y]; break;
+          }
+          if (pick) break;
+        }
+        if (!pick) break;                     // 領地太擠：剩下的資源用一般的散布方式放
+        centers.push(pick); out[type].push(pick);
+      }
+    });
+    return out;
   }
 
   // 點在不在某些區塊裡
@@ -246,6 +334,6 @@
     return node.type === 'mineral' ? mineralAt(node.x, node.y, cfg) : def.item;
   }
 
-  return { ITEMS, MINERALS, EQUIPMENT, NODE_TYPES, DEFAULT_SPAWN, mineralAt, nodeItem, LIMITS, GATHER_RANGE, GATHER_COOLDOWN, PICKUP_RANGE, STACK_MAX, BAG_KINDS,
+  return { ITEMS, MINERALS, EQUIPMENT, NODE_TYPES, DEFAULT_SPAWN, PATCH, patchCounts, planPatches, mineralAt, nodeItem, LIMITS, GATHER_RANGE, GATHER_COOLDOWN, PICKUP_RANGE, STACK_MAX, BAG_KINDS,
            normalizeConfig, totalCount, wildDensities, currentAmount, landTiles, territoryResourceError, findSpot, inBlocks };
 });

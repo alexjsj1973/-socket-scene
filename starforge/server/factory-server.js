@@ -220,6 +220,19 @@ module.exports = function createFactoryServer(ctx) {
     }
   }
 
+  // 隊伍工廠建築佔的格子（採礦機除外：資源本來就要在它底下）：放新資源時避開（2026-11-22 礦區）
+  function buildingTiles(w, teamId) {
+    const out = new Set();
+    const f = w && w.fac && w.fac.teams.get(teamId);
+    if (!f) return out;
+    for (const b of f.S.b.values()) {
+      const d = F.BUILDINGS[b.type];
+      if (!d || d.kind === 'miner') continue;
+      for (let y = b.y; y < b.y + (d.h || 1); y++) for (let x = b.x; x < b.x + (d.w || 1); x++) out.add(x + ',' + y);
+    }
+    return out;
+  }
+
   // ---- 背包工具 ----
   const R = SfResources;
   function kindsOf(inv) { let n = 0; for (const k in inv) if (inv[k] > 0) n++; return n; }
@@ -493,7 +506,7 @@ module.exports = function createFactoryServer(ctx) {
     });
   }
 
-  return { loadAll, onJoin, onLeave, bind, isNodeClaimed, revalidateMiners, saveAll, facOf,
+  return { loadAll, onJoin, onLeave, bind, isNodeClaimed, revalidateMiners, saveAll, facOf, buildingTiles,
            // 插旗後建立工廠狀態，讓隊員馬上可以開始蓋
            onFlag(w, team) {
              const f = facOf(w, team.id, true);
