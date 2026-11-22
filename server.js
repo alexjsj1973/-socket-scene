@@ -319,6 +319,22 @@ const ROOM_ENTRY_CHECKS = {
 };
 const DEFAULT_ROOM_ID = 'main';
 
+// ---- 從外部遊戲回來：回到原本那個「外部連結傳送點」旁邊 ----
+// 玩家從智慧工廠大亨、Starforge 離開時，back.asp → game.asp → index.asp 會帶 ?ret=<link>，
+// 前端第一次 join 時送 returnLink。伺服器只接受 ROOMS_CONFIG 裡真的存在的 link 傳送點
+// （白名單），找不到、或該房間的進入檢查（ROOM_ENTRY_CHECKS）沒通過，就照舊從大廳開始。
+const RETURN_LINK_RE = /^[a-z0-9_]{1,20}$/;
+// 回來時站在傳送點正下方多少（百分比座標）：超過傳送判定距離 8，站著不動不會又被傳送出去
+const RETURN_SPAWN_OFFSET_Y = 10;
+function findReturnPortal(link) {
+  if (typeof link !== 'string' || !RETURN_LINK_RE.test(link)) return null;
+  for (const roomId of Object.keys(ROOMS_CONFIG)) {
+    const portal = (ROOMS_CONFIG[roomId].portals || []).find(p => p.link === link && !Array.isArray(p.zone));
+    if (portal) return { roomId, portal };
+  }
+  return null;
+}
+
 // 每個房間各自的即時狀態：角色清單、聊天紀錄。重啟伺服器會清空
 // （如需持久化可換成資料庫）。
 const rooms = Object.create(null);
@@ -1850,13 +1866,41 @@ io.on('connection', (socket) => {
       ownerSocketId: socket.id
     };
 
-    // 一律從預設房間（大廳）開始，不管上次斷線前傳送到哪個房間，
-    // 重新連線後都從大廳重新出發，行為單純、不容易出錯。
-    const roomId = DEFAULT_ROOM_ID;
+    // 預設從大廳開始，不管上次斷線前傳送到哪個房間，重新連線後都從大廳重新出發，行為單純、不容易出錯。
+    // 例外：從外部遊戲回來（data.returnLink，見 findReturnPortal）→ 回到那個傳送點所在的房間、站在傳送點旁。
+    let roomId = DEFAULT_ROOM_ID;
+    let returnPortal = null;
+    const ret = findReturnPortal(data && data.returnLink);
+    if (ret && getRoom(ret.roomId)) {
+      let allowed = true;
+      const entryCheck = ROOM_ENTRY_CHECKS[ret.roomId];
+      if (entryCheck) {
+        try {
+          const r = await entryCheck(socket, getRoom(ret.roomId));
+          allowed = !!(r && r.ok);
+        } catch (e) {
+          console.error('❌ 回程房間進入檢查失敗：', ret.roomId, e.message);
+          allowed = false;
+        }
+        // 檢查是非同步的：這段時間如果已經建立過角色（重複 join），就不要再建一次
+        if (socket.data.charId) return;
+      }
+      if (allowed) {
+        roomId = ret.roomId;
+        returnPortal = ret.portal;
+      }
+    }
     const room = getRoom(roomId);
 
-    // 2.5D 房間：出生點改成在可走範圍內隨機挑（不會生在櫃台裡或牆上）
-    if (getRoomLayout(room)) {
+    if (returnPortal) {
+      // 站在傳送點正下方（有設定 spawn 就用 spawn），2.5D 房間再修正到可走範圍內
+      const sx = returnPortal.spawn ? returnPortal.spawn[0] : returnPortal.x;
+      const sy = returnPortal.spawn ? returnPortal.spawn[1] : returnPortal.y + RETURN_SPAWN_OFFSET_Y;
+      const spawn = placeInRoom(room, sx, sy);
+      c.x = spawn[0];
+      c.y = spawn[1];
+    } else if (getRoomLayout(room)) {
+      // 2.5D 房間：出生點改成在可走範圍內隨機挑（不會生在櫃台裡或牆上）
       const spawn = placeInRoom(room);
       c.x = spawn[0];
       c.y = spawn[1];
