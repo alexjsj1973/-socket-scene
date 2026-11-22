@@ -29,6 +29,7 @@
   const BLOCK_R = { tree: 0.9, flower: 0.45 };    // 沒列到的（各種礦）用 ORE_R
   const ORE_R = 1.0;
   const BODY_R = 0.3;                             // 角色 / 動物身體半徑
+  const FIELD_TYPES = new Set(ORE_TYPES);         // 領地裡的礦石（礦區）：不擋路
   const blockR = (type) => (BLOCK_R[type] != null ? BLOCK_R[type] : ORE_R);
 
   // density = { tree: 24, rock: 1.7, ... }（後台設定；缺的用 DEFAULT_WILD）。設定改了就重新 create 一份
@@ -100,6 +101,7 @@
         }
       }
       if (nodesNear) for (const n of nodesNear(x, y)) {
+        if (FIELD_TYPES.has(n.type)) continue;   // 2026-11-22：領地裡的礦石是一整片平鋪的礦床，可以走上去（野外的礦石照舊擋路）
         const r = blockR(n.type) + BODY_R;
         if (Math.abs(n.x - x) < r && Math.abs(n.y - y) < r && Math.hypot(n.x - x, n.y - y) < r) return { x: n.x, y: n.y, type: n.type, r };
       }

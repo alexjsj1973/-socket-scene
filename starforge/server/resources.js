@@ -254,14 +254,16 @@
   //   做法：插旗後依「隊伍 + 旗子位置 + 資源 epoch」雜湊，替每種資源挑幾個「中心」（彼此隔開、周圍陸地夠多、避開工廠建築），
   //   新長的資源一律放在離自己種類中心最近、還沒被佔用的空地；採光搬家也搬到同一片礦區裡的另一個空位。
   //   per = 每一片大約放幾個（數量超過就多開一片）；gap = 同一片裡彼此最近的距離（格）：
-  //   礦石、樹木佔地半徑約 1 格，間隔 3 格角色才走得進去、每一顆都站得到旁邊採；花朵小，間隔 2 格。
+  //   樹木佔地半徑約 1 格，間隔 3 格角色才走得進去、每一棵都站得到旁邊採；花朵小、礦石不擋路，間隔 2 格。
   //   中心與擺放順序都是固定的雜湊，遊戲服務重啟後一樣；管理員按「重置所有資源」（epoch + 1）會換一組新的礦區位置。
+  //   2026-11-22 改：礦石改成一整片礦床（前端畫成平鋪在地上的礦區、角色可以走上去，wild.js 不擋），
+  //   所以礦點間隔 2 格就好（礦床半徑約 1.35 格，相鄰的連成一片），預設數量一種礦只開一片
   const PATCH = {
-    tree: { per: 15, gap: 3 }, flower: { per: 12, gap: 2 }, rock: { per: 12, gap: 3 }, iron: { per: 10, gap: 3 },
-    copper: { per: 10, gap: 3 }, coal: { per: 10, gap: 3 }, aluminum: { per: 10, gap: 3 }, silver: { per: 6, gap: 3 },
-    gold: { per: 6, gap: 3 }, mineral: { per: 8, gap: 3 }
+    tree: { per: 15, gap: 3 }, flower: { per: 12, gap: 2 }, rock: { per: 30, gap: 2 }, iron: { per: 15, gap: 2 },
+    copper: { per: 12, gap: 2 }, coal: { per: 12, gap: 2 }, aluminum: { per: 12, gap: 2 }, silver: { per: 6, gap: 2 },
+    gold: { per: 6, gap: 2 }, mineral: { per: 12, gap: 2 }
   };
-  const PATCH_SEP = [10, 7, 4];       // 兩片礦區中心至少隔幾格（找不到就逐步放寬）
+  const PATCH_SEP = [15, 11, 7, 4];   // 兩片礦區中心至少隔幾格（找不到就逐步放寬）
   const PATCH_ROOM = 4;               // 中心周圍這個半徑內要有夠多可用的陸地
   const patchOf = (type) => PATCH[type] || { per: 10, gap: 3 };
   // 每種資源要開幾片：cfg = normalizeConfig 的結果
