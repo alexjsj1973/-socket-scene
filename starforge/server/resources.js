@@ -221,7 +221,8 @@
       }
       const ok = (x, y) => {
         if (blocked) for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) if (blocked.has((x + dx) + ',' + (y + dy))) return false;
-        for (let dy = -gap; dy <= gap; dy++) for (let dx = -gap; dx <= gap; dx++) {
+        const gi = Math.ceil(gap);
+        for (let dy = -gi; dy <= gi; dy++) for (let dx = -gi; dx <= gi; dx++) {
           if (dx * dx + dy * dy < gap * gap - 0.01 && occupied.has((x + dx) + ',' + (y + dy))) return false;
         }
         return true;
@@ -257,11 +258,11 @@
   //   樹木佔地半徑約 1 格，間隔 3 格角色才走得進去、每一棵都站得到旁邊採；花朵小、礦石不擋路，間隔 2 格。
   //   中心與擺放順序都是固定的雜湊，遊戲服務重啟後一樣；管理員按「重置所有資源」（epoch + 1）會換一組新的礦區位置。
   //   2026-11-22 改：礦石改成一整片礦床（前端畫成平鋪在地上的礦區、角色可以走上去，wild.js 不擋），
-  //   所以礦點間隔 2 格就好（礦床半徑約 1.35 格，相鄰的連成一片），預設數量一種礦只開一片
+  //   所以礦點間隔 2.5 格就好（前端岩盤半徑約 1.7 格，相鄰的連成一片），預設數量一種礦只開一片
   const PATCH = {
-    tree: { per: 15, gap: 3 }, flower: { per: 12, gap: 2 }, rock: { per: 30, gap: 2 }, iron: { per: 15, gap: 2 },
-    copper: { per: 12, gap: 2 }, coal: { per: 12, gap: 2 }, aluminum: { per: 12, gap: 2 }, silver: { per: 6, gap: 2 },
-    gold: { per: 6, gap: 2 }, mineral: { per: 12, gap: 2 }
+    tree: { per: 15, gap: 3 }, flower: { per: 12, gap: 2 }, rock: { per: 30, gap: 2.5 }, iron: { per: 15, gap: 2.5 },
+    copper: { per: 12, gap: 2.5 }, coal: { per: 12, gap: 2.5 }, aluminum: { per: 12, gap: 2.5 }, silver: { per: 6, gap: 2.5 },
+    gold: { per: 6, gap: 2.5 }, mineral: { per: 12, gap: 2.5 }
   };
   const PATCH_SEP = [15, 11, 7, 4];   // 兩片礦區中心至少隔幾格（找不到就逐步放寬）
   const PATCH_ROOM = 4;               // 中心周圍這個半徑內要有夠多可用的陸地
