@@ -22,7 +22,11 @@
 //     再生秒數、野外密度、品種比例改了馬上生效（野外資源依新密度重算，前端收到 nodes-sync 也會重算）
 //   * 資源擋路：所有可採的東西（領地裡的資源節點 + 野外的樹、礦、花）都有圓形佔地，玩家走不進去；
 //     移動時撞到會沿邊緣繞過去，繞不過去（3 秒沒有更接近目的地）就停下。野外資源由 wild.js 依 seed 算出（與瀏覽器同一份）
-//   * 換造型：玩家隨時可以從 40 種造型（look.char = c01～c40）換一個；白名單由 game_api.asp（inc_sf_character.asp）檢查並存檔，成功後廣播給所有人
+//   * 換造型（2026-11-22 起）：角色改成 output/character-design-v1 的骨架角色（前端 js/sf-avatar.js），
+//     造型代碼 look.code = 'v2:<m|f>:<髮型>:<衣服>:<鞋子>[:<色名>=<rrggbb>,…]'（normalizeLookCode，規則與 sf-avatar.js、
+//     inc_sf_character.asp 的 SfLookCodeOk 一致）；玩家隨時可以換，ASP 再檢查一次並存檔，成功後廣播給所有人。
+//     舊的 40 種公仔造型（look.char）不能進世界：join 回 needLook，前端導回大廳重新捏角色
+//   * 走路 / 跑步 / 跳躍：move 帶 run:true 用跑速；positions 的移動旗標 1 = 走、2 = 跑；jump 只是動作展示（限速後廣播 char-jump）
 //   * 背包：可以放棄（直接消失）或丟在地上；地上的物品任何人都能撿，10 分鐘沒人撿就消失（只放記憶體，重啟會清空）
 //   * 工廠流水線（2026-11-13）：factory-server.js（模擬在 factory.js，前後端共用）；這裡只在載入世界、插旗、採集、
 //     進場 / 離線、場次切換時呼叫它（搜尋 fac.）。設計見 docs/FACTORY_DESIGN.md
@@ -39,7 +43,9 @@ const createAspApi = require('./asp-api');
 const createFactoryServer = require('./factory-server');   // 工廠流水線（2026-11-13，設計見 docs/FACTORY_DESIGN.md）
 
 const TICK_MS = 100;                 // 伺服器移動模擬間隔
-const SPEED = 7;                     // 角色移動速度（格 / 秒）
+const WALK_SPEED = 4;                // 走路速度（格 / 秒）
+const RUN_SPEED = 7;                 // 跑步速度（格 / 秒；就是以前唯一的移動速度）
+const JUMP_GAP_MS = 900;             // 跳躍的最短間隔（跳躍動作 0.96 秒）
 const SAVE_EVERY_MS = 2 * 60 * 1000; // 定期存位置
 const WORLD_REFRESH_MS = 30 * 1000;  // 定期向資料庫確認場次（GM 結束場次、換新場次、改資源分佈、改再生倍率）
 const FLUSH_EVERY_MS = 30 * 1000;    // 背包、資源節點批次存檔間隔
@@ -50,7 +56,28 @@ const LOOK_GAP_MS = 1500;            // 換造型的最短間隔
 // ---- 手持道具：只決定角色手上拿什麼、播什麼動作，不影響採集速度、戰鬥或其他數值 ----
 // 2026-11-14 起道具是背包物品（resources.js 的 EQUIPMENT，與 assets/sunnyside/equipment/catalog.json 的 id 一致）：
 //   背包裡要有才能拿；背包裡沒了（丟掉、放進機器…）會自動收起
-const HELD_ITEMS = new Set(Object.keys(SfResources.EQUIPMENT));
+const HELD_ITEMS = new Set(Object.keys(SfResources.EQUIPMENT));   // 含 2026-11-22 新增的 12 種石器（cat: 'stone'）
+// ---- 角色造型代碼（與 js/sf-avatar.js 的 parse / encode、inc/inc_sf_character.asp 的 SfLookCodeOk 一致，改一邊就要改另一邊）----
+const LOOK_HAIRS = new Set(['00', '01', '02', '03', '04', '05', '06', '07', '08', '09', '10']);   // 00 = 光頭
+const LOOK_OUTFITS = new Set(['starter'].concat([1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((n) => 'p' + String(n).padStart(2, '0')),
+  [1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((n) => 'n' + String(n).padStart(2, '0'))));   // 衣服與鞋子共用同一份代碼
+const LOOK_COLORS = ['skin', 'hair', 'eye', 'cloth', 'fur', 'cord', 'shoes'];
+// 合法就回傳「標準寫法」（顏色依固定順序、小寫、不重複），不合法回 null
+function normalizeLookCode(code) {
+  if (typeof code !== 'string' || code.length > 160) return null;
+  const m = /^v2:([mf]):(\d\d):(starter|[pn]\d\d):(starter|[pn]\d\d)(?::(.*))?$/.exec(code);
+  if (!m || !LOOK_HAIRS.has(m[2]) || !LOOK_OUTFITS.has(m[3]) || !LOOK_OUTFITS.has(m[4])) return null;
+  const colors = {};
+  if (m[5]) {
+    for (const part of m[5].split(',')) {
+      const kv = /^([a-z]+)=([0-9a-fA-F]{6})$/.exec(part);
+      if (!kv || LOOK_COLORS.indexOf(kv[1]) < 0) return null;
+      colors[kv[1]] = kv[2].toLowerCase();
+    }
+  }
+  const cs = LOOK_COLORS.filter((k) => colors[k]).map((k) => k + '=' + colors[k]);
+  return 'v2:' + m[1] + ':' + m[2] + ':' + m[3] + ':' + m[4] + (cs.length ? ':' + cs.join(',') : '');
+}
 const HELD_CHECK_MS = 2000;          // 多久檢查一次「手上的道具還在不在背包」
 const HELD_GAP_MS = 300;             // 換手持道具的最短間隔
 const USE_GAP_MS = 700;              // 揮動 / 使用道具（只播動畫）的最短間隔
@@ -71,6 +98,20 @@ module.exports = function attachStarforge(opts) {
       res.set('Cache-Control', 'public, max-age=300');
       res.sendFile(path.join(__dirname, f));
     });
+  });
+  // Godot 版用的資料（2026-11-16）：物品、資源種類、礦物權重、採集規則。
+  //   網頁版直接載入 resources.js；Godot 讀不了 JS，所以把同一份資料轉成 JSON。
+  //   Godot 網頁版放在 ASP 主機（別的網域），要允許跨網域讀取（只有公開的遊戲資料，沒有機密）。
+  app.get('/starforge/meta.json', (req, res) => {
+    const R = SfResources, pick = (o, keys) => { const r = {}; keys.forEach((k) => { if (o[k] !== undefined) r[k] = o[k]; }); return r; };
+    const ITEMS = {};                       // 含工廠材料（factory.js 載入時會補進 SfResources.ITEMS）
+    for (const k of Object.keys(R.ITEMS)) ITEMS[k] = pick(R.ITEMS[k], ['name', 'icon', 'art', 'equip']);
+    const NODE_TYPES = {};
+    for (const k of Object.keys(R.NODE_TYPES)) NODE_TYPES[k] = pick(R.NODE_TYPES[k], ['item', 'name', 'terrain', 'regenSec']);
+    res.set('Access-Control-Allow-Origin', '*');
+    res.set('Cache-Control', 'public, max-age=300');
+    res.json({ ITEMS, NODE_TYPES, MINERALS: R.MINERALS, EQUIPMENT: R.EQUIPMENT, GATHER_RANGE: R.GATHER_RANGE,
+               GATHER_COOLDOWN: R.GATHER_COOLDOWN, PICKUP_RANGE: R.PICKUP_RANGE, BAG_KINDS: R.BAG_KINDS });
   });
 
   // ---- 世界狀態（目前進行中的場次） ----
@@ -373,6 +414,9 @@ module.exports = function attachStarforge(opts) {
         const pr = await api.player(v.memberId);
         if (!pr.ok) return socket.emit('join-error', { error: pr.error || '讀取角色失敗', needLobby: true });
         if (!pr.character || !pr.team) return socket.emit('join-error', { error: '請先在大廳建立角色並加入隊伍', needLobby: true });
+        // 2026-11-22 換成骨架角色：還是舊造型（或代碼不合法）的要先回大廳重新捏角色
+        const lookCode = normalizeLookCode(pr.character.look && pr.character.look.code);
+        if (!lookCode) return socket.emit('join-error', { error: '角色外觀已全面更新，請先回大廳重新捏角色', needLobby: true, needLook: true });
         const w = await ensureWorld(pr.sessionId);
 
         // 同一個角色只能有一個連線：踢掉舊的
@@ -403,9 +447,9 @@ module.exports = function attachStarforge(opts) {
         else pos = t.findWalkable(t.size / 2 + (Math.random() - 0.5) * 40, t.size / 2 + (Math.random() - 0.5) * 40);
 
         const p = {
-          socketId: socket.id, memberId: v.memberId, charId: c.id, name: c.name, look: c.look, level: c.level,
+          socketId: socket.id, memberId: v.memberId, charId: c.id, name: c.name, look: { code: lookCode }, level: c.level,
           teamId: team.id, x: pos.x, y: pos.y, tx: null, ty: null, dir: 0, lastSave: Date.now(),
-          inventory: {}, invDirty: false, lastGather: 0, lastItemOp: 0, lastLook: 0, held: null, lastHeld: 0, lastUse: 0
+          inventory: {}, invDirty: false, lastGather: 0, lastItemOp: 0, lastLook: 0, held: null, lastHeld: 0, lastUse: 0, run: false, lastJump: 0
         };
         (pr.inventory || []).forEach((it) => { if (SfResources.ITEMS[it.code]) p.inventory[it.code] = it.qty; });
         players.set(socket.id, p);
@@ -456,6 +500,8 @@ module.exports = function attachStarforge(opts) {
         if (!world.terrain.walkable(x, y)) return socket.emit('move-error', { error: '那裡被擋住了' });
       }
       p.tx = x; p.ty = y; p.best = Math.hypot(x - p.x, y - p.y); p.stuck = 0;
+      // 跑步：網頁版一律送 run:true/false（按住 Shift、雙擊或目的地比較遠才跑）；沒帶 run 的舊用戶端（Godot 版）照舊用跑速
+      p.run = data.run !== false;
     });
 
     // ---- 插旗 ----
@@ -590,13 +636,13 @@ module.exports = function attachStarforge(opts) {
       if (!p || !world || !data || typeof data !== 'object') return;
       const now = Date.now();
       if (now - p.lastLook < LOOK_GAP_MS) return socket.emit('look-error', { error: '換太快了，等一下再試' });
-      const look = { char: String(data.char || '') };
-      if (!/^c\d{2}$/.test(look.char)) return socket.emit('look-error', { error: '造型選項不正確' });
+      const code = normalizeLookCode(data.code);
+      if (!code) return socket.emit('look-error', { error: '造型選項不正確' });
       p.lastLook = now;
-      const r = await api.saveLook(p.charId, look);
+      const r = await api.saveLook(p.charId, code);
       if (!r.ok) return socket.emit('look-error', { error: r.error || '存檔失敗，請稍後再試' });
       if (!players.has(socket.id)) return;
-      p.look = r.look || look;
+      p.look = { code: normalizeLookCode(r.look && r.look.code) || code };
       nsp.emit('char-look', { id: p.charId, look: p.look });
     });
 
@@ -622,6 +668,16 @@ module.exports = function attachStarforge(opts) {
       if (now - p.lastUse < USE_GAP_MS) return;
       p.lastUse = now;
       socket.broadcast.emit('char-use', { id: p.charId, item: p.held, dir: p.dir });
+    });
+
+    // ---- 跳躍：只是動作展示（不影響移動、碰撞），限速後轉給其他人播放 ----
+    socket.on('jump', () => {
+      const p = players.get(socket.id);
+      if (!p || !world) return;
+      const now = Date.now();
+      if (now - p.lastJump < JUMP_GAP_MS) return;
+      p.lastJump = now;
+      socket.broadcast.emit('char-jump', { id: p.charId });
     });
 
     // ---- 聊天：只收文字與頻道，說話的人、隊伍、時間都由伺服器決定 ----
@@ -682,7 +738,6 @@ module.exports = function attachStarforge(opts) {
   // ---- 移動模擬：每 100ms 往目的地走一步，撞到水或山就停；有變化才廣播 ----
   setInterval(() => {
     if (!world || players.size === 0) return;
-    const step = SPEED * TICK_MS / 1000;
     const moved = [];
     const now = Date.now();
     const w = world, hit = obstacleFn(w), ok = (x, y) => w.terrain.walkable(x, y);
@@ -690,6 +745,7 @@ module.exports = function attachStarforge(opts) {
       if (p.tx != null) {
         const dx = p.tx - p.x, dy = p.ty - p.y, d = Math.hypot(dx, dy);
         // 往目的地走一步；撞到資源沿邊緣繞，撞到水 / 山或繞不過去就停
+        const step = (p.run ? RUN_SPEED : WALK_SPEED) * TICK_MS / 1000;
         const r = d < 1e-3 ? null : SfWild.stepAround(p.x, p.y, p.tx, p.ty, step, ok, hit);
         if (r) {
           p.dir = dirOf(r[0] - p.x, r[1] - p.y);
@@ -699,7 +755,7 @@ module.exports = function attachStarforge(opts) {
           if (left < (p.best == null ? Infinity : p.best) - 0.05) { p.best = left; p.stuck = 0; } else p.stuck = (p.stuck || 0) + 1;
           if (left < 0.02 || p.stuck > 30) { p.tx = null; p.ty = null; }
         } else { p.tx = null; p.ty = null; }
-        moved.push([p.charId, +p.x.toFixed(2), +p.y.toFixed(2), p.dir, p.tx != null ? 1 : 0]);
+        moved.push([p.charId, +p.x.toFixed(2), +p.y.toFixed(2), p.dir, p.tx != null ? (p.run ? 2 : 1) : 0]);   // 移動旗標：0 停、1 走、2 跑
       }
       if (now - p.lastSave > SAVE_EVERY_MS) { p.lastSave = now; savePos(p); }
     }
