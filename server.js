@@ -286,7 +286,10 @@ const ROOMS_CONFIG = {
       // 線上多人競泳右邊：Project Starforge 入口（橘色 hue）。這是「外部連結傳送點」：
       // 帶 link 的傳送點不是房間，前端走到之後直接把整頁換到對應網址（見 index.asp 的 PORTAL_LINKS），
       // 不會送 teleport；to 只用來當唯一識別，用 'link:' 開頭避免跟房間 id 撞名。
-      { to: 'link:starforge', link: 'starforge', label: '🚀 Starforge 星球工業', x: 65, y: 55, hue: 30 }
+      { to: 'link:starforge', link: 'starforge', label: '🚀 Starforge 星球工業', x: 65, y: 55, hue: 30 },
+      // 線上多人競泳左邊：智慧工廠大亨入口（青藍色 hue），與右邊的 Starforge 對稱。
+      // 同樣是外部連結傳送點：走到後前端換整頁到 PORTAL_LINKS.factory（factory/enter.asp），不送 teleport。
+      { to: 'link:factory', link: 'factory', label: '🏭 智慧工廠大亨', x: 35, y: 55, hue: 200 }
     ]
   },
   // 線上多人競泳（戶外泳池）：多人小遊戲之後在這裡開發，目前是準備區。
@@ -2288,11 +2291,7 @@ io.on('connection', (socket) => {
 // 跟社群平台的連線、房間、事件完全分開；沿用這裡的 token 驗證與 API Key，
 // 另外可用環境變數 STARFORGE_API_URL / STARFORGE_API_KEY 覆寫。
 // ---------------------------------------------------------------
-try {
-  require('./starforge/server')({ io, app, verifyLoginToken, verifyTokenUrl: VERIFY_TOKEN_URL, apiKey: VERIFY_API_KEY });
-} catch (err) {
-  console.warn('[starforge] 遊戲服務沒有啟動（社群平台不受影響）：' + err.message);
-}
+require('./starforge/server')({ io, app, verifyLoginToken, verifyTokenUrl: VERIFY_TOKEN_URL, apiKey: VERIFY_API_KEY });
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
